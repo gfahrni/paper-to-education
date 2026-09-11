@@ -1,0 +1,11 @@
+{
+  "url": "http://127.0.0.1:8000/v1/audio/speech",
+  "host": "127.0.0.1",
+  "port": 8000,
+  "model": "mlx-community/Voxtral-4B-TTS-2603-mlx-bf16",
+  "voice": "fr_female",
+  "lang": "fr",
+  "serve": true,
+  "startup_timeout": 180,
+  "server_command": ["mlx_audio.server", "--host", "{host}", "--port", "{port}"]
+}

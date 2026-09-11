@@ -9,6 +9,7 @@ llm-output/
 
 # Local config / secrets
 config.json
+tts.json
 .env
 
 # macOS

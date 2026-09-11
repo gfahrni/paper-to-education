@@ -8,7 +8,6 @@
     "OPENAI_API_KEY": "sk-...",
     "OPENROUTER_API_KEY": "sk-or-...",
     "DEEPSEEK_API_KEY": "sk-...",
-    "MISTRAL_API_KEY": "...",
-    "ELEVENLABS_API_KEY": "sk_..."
+    "MISTRAL_API_KEY": "..."
   }
 }

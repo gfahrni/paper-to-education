@@ -10,31 +10,34 @@ Avec `--audio`, un fichier audio TTS est généré depuis le voiceover de chaque
 slide et intégré au PPT en **lecture automatique** : en diaporama, avancer ou
 reculer déclenche le voiceover de la slide affichée.
 
-Deux moteurs TTS (`--tts`) :
+Moteurs TTS (`--tts`) :
 
 - `say` (défaut) : commande macOS, gratuit et hors-ligne, puis `ffmpeg` pour
   convertir en mp3. Voix via `--voice` (ex. `Thomas`, `Amélie`).
-- `elevenlabs` : voix humaines très naturelles. Nécessite une clé API dans
-  `ELEVENLABS_API_KEY` (env ou `config.json`). Voix via `--voice` (nom ou id) ;
-  `--list-voices` affiche les voix disponibles du compte.
+- `mlx` : serveur TTS local compatible OpenAI (`mlx_audio.server`), gratuit et
+  hors-ligne. Modèle via `--tts-model`, voix via `--voice`, langue via
+  `--tts-lang`, URL via `--tts-url`. Ex. Voxtral FR : `--tts mlx
+  --tts-model mlx-community/Voxtral-4B-TTS-2603-mlx-bf16 --voice fr_female`.
+  `--serve-tts` démarre/arrête le serveur local si nécessaire.
 
 Usage :
     python build_pptx.py [--in llm-output] [--out llm-output/presentation.pptx]
-                         [--audio] [--tts say|elevenlabs] [--voice Thomas]
-                         [--speed 1.25] [--rate 180]
+                         [--audio] [--tts say|mlx] [--voice Thomas]
+                         [--speed 1.0] [--rate 180]
                          [--audio-dir llm-output/audio]
-                         [--keep-audio] [--config config.json]
+                         [--keep-audio] [--tts-config tts.json] [--serve-tts]
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -51,15 +54,16 @@ SLIDE_H = Inches(7.5)
 ACCENT = RGBColor(0x1F, 0x3A, 0x5F)
 GREY = RGBColor(0x44, 0x44, 0x44)
 
-ELEVENLABS_API = "https://api.elevenlabs.io/v1"
-ELEVENLABS_MODEL = "eleven_multilingual_v2"
-ELEVENLABS_VOICE = "George"  # voix par défaut si --voice n'est pas fourni
-ELEVENLABS_SPEED = 1.25      # vitesse par défaut pour ElevenLabs
 SAY_VOICE = "Thomas"
-PREVIEW_TEXT = (
-    "Bonjour, je suis votre présentateur. Voici un exemple de voix pour "
-    "expliquer une notion scientifique de façon claire et naturelle."
-)
+LOCAL_TTS_URL = "http://127.0.0.1:8000/v1/audio/speech"
+LOCAL_TTS_MODEL = "mlx-community/Voxtral-4B-TTS-2603-mlx-bf16"
+LOCAL_TTS_VOICE = "fr_female"
+LOCAL_TTS_LANG = "fr"
+TTS_CONFIG_DEFAULT = Path("tts.json")
+SERVER_HOST = "127.0.0.1"
+SERVER_PORT = 8000
+SERVER_COMMAND = ["mlx_audio.server", "--host", "{host}", "--port", "{port}"]
+SERVER_STARTUP_TIMEOUT = 180
 
 
 def load_storyboard(path: Path) -> dict:
@@ -94,93 +98,36 @@ def synthesize_say(text: str, dest: Path, voice: str, rate: int) -> Path | None:
     return dest
 
 
-def _elevenlabs_http(url: str, api_key: str, payload: dict | None = None) -> bytes:
-    """Appel HTTP brut à l'API ElevenLabs (stdlib, sans dépendance)."""
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(
-        url, data=data, method="POST" if data is not None else "GET"
-    )
-    req.add_header("xi-api-key", api_key)
-    req.add_header("accept", "audio/mpeg")
-    if data is not None:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            return resp.read()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")
-        raise SystemExit(f"ElevenLabs HTTP {exc.code} : {detail}")
-    except urllib.error.URLError as exc:
-        raise SystemExit(f"ElevenLabs injoignable : {exc.reason}")
-
-
-def list_elevenlabs_voices(api_key: str) -> list[dict]:
-    raw = _elevenlabs_http(f"{ELEVENLABS_API}/voices", api_key)
-    return json.loads(raw).get("voices", [])
-
-
-def voice_labels(v: dict) -> tuple[str, str]:
-    """Renvoie (nom complet, nom court) ; gère « George - Storyteller »."""
-    name = v.get("name", "").lower()
-    return name, name.split(" - ")[0].strip()
-
-
-def find_voice(voices: list[dict], query: str) -> dict | None:
-    """Trouve une voix par id, nom exact, nom court (avant ' - ') ou préfixe."""
-    q = query.strip().lower()
-    for v in voices:
-        if v.get("voice_id") == query:
-            return v
-    for v in voices:
-        if q in voice_labels(v):
-            return v
-    for v in voices:
-        name, short = voice_labels(v)
-        if short.startswith(q) or q in name:
-            return v
-    return None
-
-
-def resolve_elevenlabs_voice(api_key: str, voice: str) -> str:
-    """Accepte un voice_id (20 car.) ou un nom de voix, résolu via l'API."""
-    if re.fullmatch(r"[A-Za-z0-9]{20}", voice):
-        return voice
-    voices = list_elevenlabs_voices(api_key)
-    v = find_voice(voices, voice)
-    if v is not None:
-        return v["voice_id"]
-    names = ", ".join(sorted({voice_labels(v)[1] for v in voices}))
-    raise SystemExit(
-        f"Voix ElevenLabs « {voice} » introuvable.\nDisponibles : {names}\n"
-        "Astuce : python build_pptx.py --tts elevenlabs --list-voices"
-    )
-
-
-def synthesize_elevenlabs(
-    text: str, dest: Path, voice: str, model_id: str, api_key: str
+def synthesize_mlx(
+    text: str, dest: Path, url: str, voice: str, model_id: str, lang_code: str
 ) -> Path | None:
-    """Génère `dest` (mp3) depuis `text` via l'API ElevenLabs."""
+    """Génère `dest` (mp3) via un serveur TTS local compatible OpenAI (mlx-audio)."""
     if not text.strip():
         return None
-    if not api_key:
-        raise SystemExit(
-            "Clé ElevenLabs manquante : renseigne ELEVENLABS_API_KEY dans\n"
-            "l'environnement, ou dans config.json (champ env), puis relance."
-        )
-    voice_id = resolve_elevenlabs_voice(api_key, voice)
-    url = f"{ELEVENLABS_API}/text-to-speech/{voice_id}?output_format=mp3_44100_128"
     payload = {
-        "text": text,
-        "model_id": model_id,
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75,
-            "style": 0.0,
-            "use_speaker_boost": True,
-        },
+        "model": model_id,
+        "input": text,
+        "voice": voice,
+        "lang_code": lang_code,
+        "response_format": "mp3",
     }
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST"
+    )
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=900) as resp:
+            audio = resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise SystemExit(f"TTS local HTTP {exc.code} : {detail}")
+    except urllib.error.URLError as exc:
+        raise SystemExit(
+            f"Serveur TTS local injoignable ({url}) : {exc.reason}\n"
+            "Démarre-le, ex. : mlx_audio.server --host 127.0.0.1 --port 8000"
+        )
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(_elevenlabs_http(url, api_key, payload))
+    dest.write_bytes(audio)
     return dest
 
 
@@ -188,21 +135,90 @@ def synthesize(text: str, dest: Path, cfg: dict) -> Path | None:
     """Dispatch TTS selon `cfg['tts']`."""
     if not text.strip():
         return None
-    if cfg["tts"] == "elevenlabs":
-        return synthesize_elevenlabs(
-            text, dest, cfg["voice"], cfg["model_id"], cfg.get("api_key", "")
+    if cfg["tts"] == "mlx":
+        return synthesize_mlx(
+            text, dest, cfg["url"], cfg["voice"], cfg["model_id"], cfg["lang"]
         )
     return synthesize_say(text, dest, cfg["voice"], cfg["rate"])
 
 
-def play_audio(path: Path) -> None:
-    """Joue un audio localement si un lecteur est disponible (afplay/ffplay)."""
-    if shutil.which("afplay"):
-        subprocess.run(["afplay", str(path)])
-    elif shutil.which("ffplay"):
-        subprocess.run(
-            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
+# ---------------------------------------------------------------------------
+# Cycle de vie du serveur TTS local (mlx_audio.server)
+# ---------------------------------------------------------------------------
+
+def load_tts_config(path: Path) -> dict:
+    """Lit la config du serveur TTS local (tts.json), sans échouer si absent."""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise SystemExit(f"Config TTS invalide ({path}) : {exc}")
+    if not isinstance(data, dict):
+        raise SystemExit(f"Config TTS invalide ({path}) : objet JSON attendu.")
+    return data
+
+
+def port_open(host: str, port: int, timeout: float = 0.5) -> bool:
+    """Vrai si un serveur écoute déjà sur host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def wait_for_server(host: str, port: int, timeout: int, proc) -> bool:
+    """Attend que le port s'ouvre ; abandonne si le process meurt."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if port_open(host, port):
+            return True
+        if proc.poll() is not None:
+            return False
+        time.sleep(0.5)
+    return False
+
+
+def start_local_server(
+    host: str, port: int, command: list[str], timeout: int, log_path: Path
+):
+    """Démarre le serveur TTS local et attend qu'il écoute. Renvoie le Popen."""
+    exe = shutil.which(command[0])
+    if not exe:
+        raise SystemExit(
+            f"Commande TTS introuvable : « {command[0]} ».\n"
+            "Installe-le : uv tool install --force 'mlx-audio[server,tts]' "
+            "--with misaki --with phonemizer-fork --with espeakng-loader"
         )
+    argv = [exe] + [a.format(host=host, port=port) for a in command[1:]]
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log = log_path.open("w", encoding="utf-8")
+    print(f"  démarrage du serveur TTS : {' '.join(argv)}")
+    try:
+        proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        log.close()
+        raise SystemExit(f"Échec du démarrage du serveur TTS : {exc}")
+    if not wait_for_server(host, port, timeout, proc):
+        stop_local_server(proc)
+        raise SystemExit(
+            f"Le serveur TTS n'écoute pas sur {host}:{port} après {timeout}s.\n"
+            f"Voir le log : {log_path}"
+        )
+    return proc
+
+
+def stop_local_server(proc) -> None:
+    """Arrête proprement le serveur TTS lancé par le script."""
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 def atempo_filter(speed: float) -> str:
@@ -443,33 +459,34 @@ def build(data: dict, out_path: Path, root: Path, audio_cfg: dict | None = None)
     return len(slides)
 
 
-def load_env(path: Path) -> dict[str, str]:
-    """Lit le champ `env` de config.json (clés API), sans échouer si absent."""
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return {k: str(v) for k, v in (data.get("env") or {}).items() if v}
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description="storyboard.json -> presentation.pptx")
     ap.add_argument("--in", dest="indir", type=Path, default=Path("llm-output"))
     ap.add_argument("--out", dest="outfile", type=Path, default=None)
     ap.add_argument("--audio", action="store_true",
                     help="génère un voiceover TTS par slide en lecture automatique")
-    ap.add_argument("--tts", choices=["say", "elevenlabs"], default="say",
+    ap.add_argument("--tts", choices=["say", "mlx"], default="say",
                     help="moteur TTS (défaut : say macOS)")
     ap.add_argument("--voice", default=None,
-                    help="voix : nom/id ElevenLabs, ou voix macOS pour --tts say "
-                         "(liste séparée par des virgules avec --preview)")
-    ap.add_argument("--tts-model", default=ELEVENLABS_MODEL,
-                    help="modèle ElevenLabs (ex. eleven_multilingual_v2, eleven_flash_v2_5)")
+                    help="voix : voix macOS (--tts say) ou voix du serveur local "
+                         "(--tts mlx, ex. fr_female)")
+    ap.add_argument("--tts-model", default=None,
+                    help="id Hugging Face du modèle TTS local (--tts mlx)")
+    ap.add_argument("--tts-url", default=None,
+                    help="URL du serveur TTS local compatible OpenAI (--tts mlx)")
+    ap.add_argument("--tts-lang", default=None,
+                    help="code langue du serveur local (--tts mlx, ex. fr)")
+    ap.add_argument("--tts-config", type=Path, default=TTS_CONFIG_DEFAULT,
+                    help="config du serveur TTS local (défaut : tts.json)")
+    ap.add_argument("--serve-tts", action="store_true",
+                    help="avec --tts mlx : démarre le serveur local s'il est absent "
+                         "et l'arrête à la fin (un serveur déjà lancé est conservé)")
+    ap.add_argument("--serve-tts-timeout", type=int, default=None,
+                    help=f"délai max d'attente du serveur TTS (s, "
+                         f"défaut {SERVER_STARTUP_TIMEOUT})")
     ap.add_argument("--rate", type=int, default=180, help="débit say (mots/minute)")
     ap.add_argument("--speed", type=float, default=None,
-                    help="vitesse de lecture (1.0 = normal ; défaut ElevenLabs : 1.25)")
+                    help="vitesse de lecture (1.0 = normal)")
     ap.add_argument("--audio-dir", type=Path, default=None,
                     help="dossier des mp3 (défaut : <in>/audio)")
     ap.add_argument("--keep-audio", action="store_true",
@@ -478,64 +495,28 @@ def main() -> None:
                     help="en diaporama, avance à la slide suivante à la fin du voiceover")
     ap.add_argument("--advance-buffer", type=int, default=600,
                     help="délai après l'audio avant d'avancer (ms, défaut 600)")
-    ap.add_argument("--config", type=Path, default=Path("config.json"),
-                    help="config locale (champ env : clés API) — ignorée par Git")
-    ap.add_argument("--list-voices", action="store_true",
-                    help="avec --tts elevenlabs : liste les voix du compte et quitte")
-    ap.add_argument("--preview", nargs="?", const=PREVIEW_TEXT, default=None,
-                    metavar="TEXTE",
-                    help="avec --tts elevenlabs : échantillon TTS de chaque voix "
-                         "(défaut : phrase FR) puis lecture locale")
     args = ap.parse_args()
 
     root = Path.cwd()
-    env_extra = load_env(args.config if args.config.is_absolute() else root / args.config)
-    api_key = os.environ.get("ELEVENLABS_API_KEY") or env_extra.get("ELEVENLABS_API_KEY", "")
     indir = args.indir if args.indir.is_absolute() else root / args.indir
 
-    if args.list_voices:
-        if args.tts != "elevenlabs":
-            raise SystemExit("--list-voices nécessite --tts elevenlabs")
-        if not api_key:
-            raise SystemExit("Clé ElevenLabs manquante (ELEVENLABS_API_KEY).")
-        for v in list_elevenlabs_voices(api_key):
-            full = v.get("name", "?")
-            short = full.split(" - ")[0].strip()
-            print(f"{short:<14} {v.get('voice_id', '?')}")
-            if " - " in full:
-                print(f"{'':<14} {full.split(' - ', 1)[1]}")
-            url = v.get("preview_url")
-            if url:
-                print(f"{'':<14} écoute : {url}")
-        return
+    tts_config_path = (
+        args.tts_config if args.tts_config.is_absolute() else root / args.tts_config
+    )
+    tts_cfg = load_tts_config(tts_config_path)
 
-    if args.preview is not None:
-        if args.tts != "elevenlabs":
-            raise SystemExit("--preview nécessite --tts elevenlabs")
-        if not api_key:
-            raise SystemExit("Clé ElevenLabs manquante (ELEVENLABS_API_KEY).")
-        voices = list_elevenlabs_voices(api_key)
-        wanted = [w.strip() for w in (args.voice or "").split(",") if w.strip()]
-        selected = voices if not wanted else []
-        for w in wanted:
-            v = find_voice(voices, w)
-            if v is None:
-                raise SystemExit(f"Voix « {w} » introuvable.")
-            selected.append(v)
-        preview_dir = indir / "voice-preview"
-        preview_dir.mkdir(parents=True, exist_ok=True)
-        speed = args.speed if args.speed is not None else ELEVENLABS_SPEED
-        print(f"{len(selected)} voix, texte : « {args.preview} » (vitesse {speed}x)\n")
-        for v in selected:
-            short = v.get("name", v.get("voice_id", "voix")).split(" - ")[0].strip()
-            name = re.sub(r"[^A-Za-z0-9_-]+", "_", short)
-            dest = preview_dir / f"{name}.mp3"
-            synthesize_elevenlabs(args.preview, dest, v["voice_id"], args.tts_model, api_key)
-            apply_speed(dest, speed)
-            print(f"  {short:<14} -> {dest}")
-            play_audio(dest)
-        print(f"\néchantillons : {preview_dir}")
-        return
+    tts_url = args.tts_url or tts_cfg.get("url") or LOCAL_TTS_URL
+    tts_model = args.tts_model or tts_cfg.get("model") or LOCAL_TTS_MODEL
+    tts_lang = args.tts_lang or tts_cfg.get("lang") or LOCAL_TTS_LANG
+    cfg_voice = tts_cfg.get("voice") or LOCAL_TTS_VOICE
+
+    server_host = str(tts_cfg.get("host", SERVER_HOST))
+    server_port = int(tts_cfg.get("port", SERVER_PORT))
+    server_cmd = tts_cfg.get("server_command") or SERVER_COMMAND
+    serve_tts = args.tts == "mlx" and (args.serve_tts or bool(tts_cfg.get("serve")))
+    serve_tts_timeout = args.serve_tts_timeout or int(
+        tts_cfg.get("startup_timeout", SERVER_STARTUP_TIMEOUT)
+    )
 
     storyboard = indir / "storyboard.json"
     if not storyboard.is_file():
@@ -551,10 +532,8 @@ def main() -> None:
         audio_dir = args.audio_dir or (indir / "audio")
         if not audio_dir.is_absolute():
             audio_dir = root / audio_dir
-        voice = args.voice or (ELEVENLABS_VOICE if args.tts == "elevenlabs" else SAY_VOICE)
-        speed = args.speed if args.speed is not None else (
-            ELEVENLABS_SPEED if args.tts == "elevenlabs" else 1.0
-        )
+        voice = args.voice or (cfg_voice if args.tts == "mlx" else SAY_VOICE)
+        speed = args.speed if args.speed is not None else 1.0
         audio_cfg = {
             "tts": args.tts,
             "dir": audio_dir,
@@ -562,13 +541,34 @@ def main() -> None:
             "rate": args.rate,
             "speed": speed,
             "keep": args.keep_audio,
-            "model_id": args.tts_model,
-            "api_key": api_key,
+            "model_id": tts_model,
+            "url": tts_url,
+            "lang": tts_lang,
             "advance": args.advance,
             "advance_buffer": args.advance_buffer,
         }
 
-    n = build(data, outfile, root, audio_cfg)
+    server_proc = None
+    if serve_tts and not args.audio:
+        print("  --serve-tts ignoré : ajoute --audio pour générer le voiceover.")
+    if serve_tts and args.audio:
+        if port_open(server_host, server_port):
+            print(f"  serveur TTS déjà en écoute sur {server_host}:{server_port} "
+                  "— conservé tel quel.")
+        else:
+            server_proc = start_local_server(
+                server_host, server_port, server_cmd,
+                serve_tts_timeout, indir / "tts-server.log",
+            )
+            print(f"  serveur TTS démarré (pid {server_proc.pid}).")
+
+    try:
+        n = build(data, outfile, root, audio_cfg)
+    finally:
+        if server_proc is not None:
+            stop_local_server(server_proc)
+            print("  serveur TTS arrêté.")
+
     print(f"{n} slides -> {outfile}")
     if audio_cfg:
         extra = ", avance auto en fin de voix" if audio_cfg.get("advance") else ""

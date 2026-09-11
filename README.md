@@ -76,59 +76,87 @@ llm-output/
 - Le prompt qui pilote la session est versionné dans
   `prompts/llm-process.md`.
 
-## Prérequis
+## Ce qu'il faut avoir
 
-- **Python 3.10+**.
-- **opencode** (pour l'étape 2) installé et disponible dans le `PATH` :
+| Composant | Utile pour | Obligatoire |
+| --- | --- | --- |
+| **macOS sur Apple Silicon** | voiceover TTS local (`mlx`) et `say` | seulement pour le voiceover |
+| **Python 3.10+** | tout le pipeline | oui |
+| **ffmpeg** | convertir / accélérer l'audio | oui pour le voiceover |
+| **opencode** + un provider | étape 2 (storyboard + voiceover) | oui |
+| **uv** | installer le serveur TTS local | oui pour `--tts mlx` |
+| **Homebrew** | installer `ffmpeg`, `uv`, `opencode` | recommandé (macOS) |
 
-  ```bash
-  curl -fsSL https://opencode.ai/install | bash   # macOS / Linux
-  # ou
-  brew install anomalyco/tap/opencode
-  ```
-
-- Un provider configuré dans opencode. Le script utilise par défaut des modèles
-  **gratuits** ; connecte un provider une fois avec `opencode auth login` (ou
-  `/connect` dans le TUI opencode), puis vérifie :
-
-  ```bash
-  opencode models | grep big-pickle
-  ```
-
-  Si le premier modèle est indisponible, `llm-process.py` bascule
-  automatiquement sur les autres modèles gratuits.
+> ⚠️ Le voiceover repose sur **MLX** (`mlx-audio`) et sur `say`, tous deux
+> **macOS / Apple Silicon**. Sur Linux, Windows ou Mac Intel, l'extraction PDF
+> et la génération du storyboard fonctionnent, mais **pas l'audio**.
 
 ## Installation
+
+### 1. Outils système (macOS)
+
+```bash
+brew install ffmpeg uv
+
+# opencode (étape 2)
+curl -fsSL https://opencode.ai/install | bash   # ou : brew install anomalyco/tap/opencode
+```
+
+### 2. Environnement Python du projet
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install pymupdf pillow python-pptx
-```
+pip install -r requirements.txt
 
-`pdfplumber` est **optionnel** (meilleure détection de tables) :
-
-```bash
+# optionnel : meilleure détection des tables
 pip install pdfplumber
 ```
+
+### 3. Fournisseur LLM (opencode)
+
+Connecte un provider une fois (`opencode auth login`, ou `/connect` dans le TUI
+opencode), puis vérifie :
+
+```bash
+opencode models | grep big-pickle
+```
+
+Le script utilise par défaut des modèles **gratuits** et bascule automatiquement
+sur les suivants si le premier est indisponible.
+
+### 4. Serveur TTS local (voiceover, optionnel)
+
+```bash
+uv tool install --force 'mlx-audio[server,tts]' \
+    --with misaki --with phonemizer-fork --with espeakng-loader
+
+cp tts.example.json tts.json   # ajuste ensuite voix / modèle si besoin
+```
+
+`uv tool` expose `mlx_audio.*` dans `~/.local/bin` sans toucher à ton Python.
+Détails (modèles, voix, cycle de vie du serveur) :
+[Voiceover automatique](#4-voiceover-automatique-dans-le-ppt).
+
 
 ## Utilisation
 
 ### Raccourcis (Makefile)
 
-Les étapes courantes sont encapsulées dans le `Makefile` (voix ElevenLabs
-`George` par défaut) :
+Les étapes courantes sont encapsulées dans le `Makefile` (voix locale Voxtral
+`fr_female`, serveur TTS démarré/arrêté automatiquement) :
 
 ```bash
 make            # affiche l'aide
+make install    # crée .venv + installe les dépendances Python
 make extract    # PDF -> paper-processed/
 make storyboard # paper-processed/ -> llm-output/ (storyboard + voiceover)
-make pptx       # llm-output/ -> presentation.pptx + voiceover ElevenLabs
-make preview    # écoute un échantillon de la voix
+make pptx       # llm-output/ -> presentation.pptx + voiceover local
+make serve-tts  # démarre le serveur TTS local en manuel (127.0.0.1:8000)
 
-make pptx VOICE=Alice       # surcharge la voix
-make pptx SPEED=1.0         # vitesse normale
-make pptx VOICE=Alice SPEED=1.1
+make pptx VOICE=fr_male   # surcharge la voix
+make pptx SPEED=1.1       # vitesse de lecture
+make pptx TTS=say         # repli sur la voix macOS (hors-ligne, robotique)
 ```
 
 ### 1. Extraire le PDF
@@ -157,8 +185,12 @@ python llm-process.py [--paper paper-processed] [--out llm-output] [--build]
 | `--timeout` | `1800` | Délai max par session (s) |
 | `--build` | — | Génère aussi `presentation.pptx` |
 | `--audio` | — | Avec `--build` : voiceover TTS (lecture auto) |
-| `--tts` | `say` | Moteur : `say` (macOS) ou `elevenlabs` |
-| `--voice` | selon `--tts` | Voix ElevenLabs (nom/id) ou voix macOS |
+| `--tts` | `say` | Moteur : `say` (macOS), `mlx` (serveur local) |
+| `--tts-config` | `tts.json` | Config du serveur TTS local |
+| `--serve-tts` | — | Avec `--tts mlx` : démarre/arrête le serveur si besoin |
+| `--tts-url` | depuis `tts.json` | URL du serveur TTS local |
+| `--tts-lang` | depuis `tts.json` | Code langue du serveur local (`fr`) |
+| `--voice` | selon `--tts` | Voix locale (`fr_female`) ou voix macOS |
 | `--dry-run` | — | Affiche la commande sans exécuter la session |
 
 Exemple complet :
@@ -224,79 +256,89 @@ et intégré au `.pptx` en **lecture automatique** : en diaporama, avancer ou
 reculer déclenche le voiceover de la slide affichée (et donc le rejoue si tu
 reviens en arrière).
 
-Deux moteurs, via `--tts` :
+Moteurs disponibles via `--tts` :
 
 | `--tts` | Qualité | Dépendances | Voix |
 | --- | --- | --- | --- |
-| `say` (défaut) | robotique | macOS `say` + `ffmpeg` | `Thomas`, `Amélie`… (`say -v '?'`) |
-| `elevenlabs` | voix humaines très naturelles | clé API ElevenLabs | nom ou id de voix |
+| `mlx` | voix humaines, FR natif | serveur local `mlx-audio` | `fr_female`, `fr_male`… |
+| `say` | robotique | macOS `say` + `ffmpeg` | `Thomas`, `Amélie`… (`say -v '?'`) |
 
 ```bash
-# Voix macOS (gratuit, hors-ligne)
-python llm-process.py --build --audio
-
-# Voix humaines ElevenLabs (voix par défaut : George)
-python llm-process.py --build --audio --tts elevenlabs
+# Voix locale Voxtral (recommandé)
+python llm-process.py --build --audio --tts mlx --serve-tts
 
 # Sur un storyboard existant
-python build_pptx.py --in llm-output --audio --tts elevenlabs --voice George
+python build_pptx.py --in llm-output --audio --tts mlx --advance
 
-# Raccourci équivalent (voir Makefile)
-make pptx
+# Repli voix macOS (gratuit, hors-ligne, moins naturel)
+python llm-process.py --build --audio --tts say
 ```
 
-#### Configurer ElevenLabs
+#### Serveur TTS local (`mlx-audio`)
 
-1. Crée un compte sur elevenlabs.io, puis récupère ta clé API (Profil → API key).
-2. Ajoute-la dans `config.json` (gitignoré) :
+Le moteur `mlx` appelle un **serveur local compatible OpenAI**
+(`mlx_audio.server`), gratuit et hors-ligne, qui fait tourner
+[Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS), Voxtral, Kokoro, etc. sur
+Apple Silicon.
 
-   ```json
-   {
-     "env": { "ELEVENLABS_API_KEY": "sk_..." }
-   }
-   ```
+Installation (une fois) :
 
-   ou exporte-la : `export ELEVENLABS_API_KEY=sk_...`.
-3. Liste les voix de ton compte et écoute-les :
+```bash
+brew install ffmpeg
+uv tool install --force 'mlx-audio[server,tts]' \
+    --with misaki --with phonemizer-fork --with espeakng-loader
+```
 
-   ```bash
-   # noms, ids et lien d'écoute fourni par ElevenLabs (gratuit)
-   python build_pptx.py --tts elevenlabs --list-voices
+> `uv tool` expose les commandes dans `~/.local/bin` sans polluer ton Python.
+> `misaki` + `phonemizer-fork` + `espeakng-loader` sont requis pour le français.
 
-   # échantillon en français de chaque voix, joué localement (consomme des crédits)
-   python build_pptx.py --tts elevenlabs --preview
+La configuration vit dans **`tts.json`** (racine, gitignoré ; copie
+`tts.example.json`) :
 
-   # seulement quelques voix, avec ton propre texte
-   python build_pptx.py --tts elevenlabs --voice "Alice,Matilda,River" \
-       --preview "Voici comment j'explique un mécanisme physiopathologique."
-   ```
+```json
+{
+  "url": "http://127.0.0.1:8000/v1/audio/speech",
+  "host": "127.0.0.1",
+  "port": 8000,
+  "model": "mlx-community/Voxtral-4B-TTS-2603-mlx-bf16",
+  "voice": "fr_female",
+  "lang": "fr",
+  "serve": true,
+  "startup_timeout": 180,
+  "server_command": ["mlx_audio.server", "--host", "{host}", "--port", "{port}"]
+}
+```
 
-   Les échantillons sont écrits dans `llm-output/voice-preview/` (réécoutables
-   avec `afplay <fichier>`). Les voix natives françaises de la **Voice Library**
-   donnent le meilleur résultat ; `--voice` accepte un nom ou un `voice_id`.
+Priorité : **options CLI > `tts.json` > défauts**.
 
-- Modèle par défaut : `eleven_multilingual_v2` (naturel). Pour économiser les
-  crédits : `--tts-model eleven_flash_v2_5`.
-- L'offre gratuite est limitée (≈ 10 000 caractères/mois) : un run complet de
-  14 slides la consomme presque entièrement. Utilise `--keep-audio` pour ne pas
-  régénérer les mp3 déjà présents.
+Avec `serve: true` (ou `--serve-tts`), `build_pptx.py` gère le cycle de vie :
+
+- serveur **déjà en écoute** → conservé tel quel (jamais arrêté) ;
+- serveur **absent** → démarré, attente de disponibilité, génération, puis
+  **arrêt automatique** (même en cas d'erreur).
+
+Pour le lancer/le garder en manuel : `make serve-tts`.
 
 | Option | Défaut | Description |
 | --- | --- | --- |
 | `--audio` | — | Génère et intègre le voiceover TTS (lecture auto) |
-| `--tts` | `say` | `say` (macOS) ou `elevenlabs` |
-| `--voice` | `Thomas` / `George` | Voix macOS ou nom/id ElevenLabs |
-| `--tts-model` | `eleven_multilingual_v2` | Modèle ElevenLabs |
+| `--tts` | `say` | `mlx` (serveur local) ou `say` (macOS) |
+| `--tts-config` | `tts.json` | Config du serveur TTS local |
+| `--serve-tts` | — | Démarre/arrête le serveur local si nécessaire |
+| `--serve-tts-timeout` | `180` | Attente max du serveur (s) |
+| `--tts-url` | `tts.json` | URL du serveur TTS local |
+| `--tts-model` | `tts.json` | Modèle (id Hugging Face) |
+| `--voice` | `fr_female` | Voix locale (ex. `fr_female`, `fr_male`) |
+| `--tts-lang` | `fr` | Code langue du serveur local |
 | `--rate` | `180` | Débit `say` (mots/minute) |
-| `--speed` | `1.25` (ElevenLabs) / `1.0` | Vitesse de lecture (hauteur conservée) |
+| `--speed` | `1.0` | Vitesse de lecture (hauteur conservée) |
 | `--audio-dir` | `llm-output/audio` | Dossier des mp3 |
 | `--keep-audio` | — | Réutilise les mp3 existants (pas de régénération) |
 | `--advance` | — | En diaporama, avance à la fin du voiceover de la slide |
 | `--advance-buffer` | `600` | Délai après l'audio avant d'avancer (ms) |
 
 La vitesse (`--speed`) est appliquée par ffmpeg (`atempo`) sans modifier la
-hauteur de la voix ; ElevenLabs est à `1.25` par défaut, `say` à `1.0`
-(utiliser `--rate` dans ce cas).
+hauteur de la voix (défaut `1.0`).
 
 Avec `--advance`, la durée de chaque mp3 (mesurée par `ffprobe`) est inscrite
 dans la transition de la slide (« avancer après N ms ») : en diaporama, le
@@ -304,7 +346,8 @@ voiceover se lance puis la slide suivante s'affiche automatiquement à la fin
 (+ `--advance-buffer` ms de marge). `make pptx` active déjà `--advance`.
 
 Limite : le découpage reste **par slide** ; sauter à un paragraphe précis du
-voiceover n'est pas géré nativement par PowerPoint.
+voiceover n'est pas géré nativement par PowerPoint. Changer de voix ou de
+modèle régénère tout l'audio (sauf `--keep-audio`).
 
 ## Feuille de route
 
@@ -312,13 +355,14 @@ voiceover n'est pas géré nativement par PowerPoint.
 - [x] Storyboard + voiceover via LLM (opencode)
 - [x] Export PowerPoint (`.pptx`)
 - [x] Voiceover TTS en lecture automatique par slide
-- [x] Moteur TTS ElevenLabs (voix humaines) en plus de `say`
+- [x] Moteur TTS local (`mlx-audio`, Voxtral FR) avec gestion auto du serveur
 - [x] Choix du modèle / de la clé API via `config.json`
 - [ ] Export vidéo MP4 (slides + voix off)
 - [ ] Choix de l'agent opencode en argument
 
 ## Notes
 
-- `input-pdf/`, `paper-processed/`, `llm-output/`, `config.json`, `.env` et les
-  PDF (`*.pdf`) sont ignorés par Git.
+- `input-pdf/`, `paper-processed/`, `llm-output/`, `config.json`, `tts.json`,
+  `.env` et les PDF (`*.pdf`) sont ignorés par Git.
 - L'étape 1 est déterministe et sans LLM ; l'étape 2 est générative.
+- Le serveur TTS local est sans clé API ; la voix est figée dans `tts.json`.

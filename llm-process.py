@@ -23,9 +23,10 @@ Usage :
     --config    config locale (modèles + clés API), ignorée par Git
     --build     lance aussi build_pptx.py pour générer llm-output/presentation.pptx
     --audio     avec --build : ajoute un voiceover TTS en lecture automatique
-    --tts       say (macOS, défaut) ou elevenlabs (voix humaines, clé API requise)
-    --voice     nom/id de voix (ElevenLabs) ou voix macOS pour --tts say
-    --speed     vitesse de lecture (défaut ElevenLabs : 1.25)
+    --tts       say (macOS, défaut) ou mlx (serveur local)
+    --voice     voix macOS (--tts say) ou voix locale (--tts mlx)
+    --serve-tts avec --tts mlx : démarre/arrête le serveur local si besoin
+    --speed     vitesse de lecture (défaut 1.0)
     --advance   en diaporama, avance à la fin du voiceover de chaque slide
     --dry-run   affiche la commande sans exécuter la session (test rapide)
 
@@ -182,15 +183,23 @@ def main() -> None:
     ap.add_argument("--build", action="store_true", help="génère aussi le .pptx")
     ap.add_argument("--audio", action="store_true",
                     help="avec --build : voiceover TTS en lecture automatique par slide")
-    ap.add_argument("--tts", choices=["say", "elevenlabs"], default="say",
+    ap.add_argument("--tts", choices=["say", "mlx"], default="say",
                     help="moteur TTS (défaut : say macOS)")
     ap.add_argument("--voice", default=None,
-                    help="voix : nom/id ElevenLabs, ou voix macOS pour --tts say")
-    ap.add_argument("--tts-model", default="eleven_multilingual_v2",
-                    help="modèle ElevenLabs")
+                    help="voix macOS (--tts say) ou voix locale (--tts mlx)")
+    ap.add_argument("--tts-model", default=None,
+                    help="id Hugging Face du modèle TTS local (--tts mlx)")
+    ap.add_argument("--tts-url", default=None,
+                    help="URL du serveur TTS local compatible OpenAI (--tts mlx)")
+    ap.add_argument("--tts-lang", default=None,
+                    help="code langue du serveur local (--tts mlx, ex. fr)")
+    ap.add_argument("--tts-config", type=Path, default=None,
+                    help="config du serveur TTS local (défaut build_pptx : tts.json)")
+    ap.add_argument("--serve-tts", action="store_true",
+                    help="avec --tts mlx : démarre/arrête le serveur local si besoin")
     ap.add_argument("--rate", type=int, default=180, help="débit say (mots/minute)")
     ap.add_argument("--speed", type=float, default=None,
-                    help="vitesse de lecture (défaut ElevenLabs : 1.25)")
+                    help="vitesse de lecture (défaut 1.0)")
     ap.add_argument("--advance", action="store_true",
                     help="en diaporama, avance à la slide suivante à la fin du voiceover")
     ap.add_argument("--dry-run", action="store_true", help="n'exécute pas la session")
@@ -258,8 +267,18 @@ def main() -> None:
         print("\n=== Génération du PowerPoint ===")
         build_cmd = [
             sys.executable, str(root / "build_pptx.py"), "--in", str(out),
-            "--tts", args.tts, "--tts-model", args.tts_model,
+            "--tts", args.tts,
         ]
+        if args.tts_model:
+            build_cmd += ["--tts-model", args.tts_model]
+        if args.tts_url:
+            build_cmd += ["--tts-url", args.tts_url]
+        if args.tts_lang:
+            build_cmd += ["--tts-lang", args.tts_lang]
+        if args.tts_config:
+            build_cmd += ["--tts-config", str(args.tts_config)]
+        if args.serve_tts:
+            build_cmd += ["--serve-tts"]
         if args.voice:
             build_cmd += ["--voice", args.voice]
         if args.audio:
