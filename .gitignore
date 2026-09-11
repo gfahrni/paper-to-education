@@ -7,6 +7,10 @@ paper-processed/
 # LLM output (storyboard, voiceover, pptx)
 llm-output/
 
+# Local config / secrets
+config.json
+.env
+
 # macOS
 .DS_Store
 

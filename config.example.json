@@ -1,0 +1,13 @@
+{
+  "models": [
+    "opencode/big-pickle",
+    "opencode/mimo-v2.5-free"
+  ],
+  "env": {
+    "ANTHROPIC_API_KEY": "sk-ant-...",
+    "OPENAI_API_KEY": "sk-...",
+    "OPENROUTER_API_KEY": "sk-or-...",
+    "DEEPSEEK_API_KEY": "sk-...",
+    "MISTRAL_API_KEY": "..."
+  }
+}

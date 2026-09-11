@@ -134,6 +134,7 @@ python llm-process.py [--paper paper-processed] [--out llm-output] [--build]
 | `--paper` | `paper-processed` | Dossier d'extraction |
 | `--out` | `llm-output` | Dossier de sortie |
 | `--prompt` | `prompts/llm-process.md` | Prompt envoyé à la session |
+| `--config` | `config.json` | Config locale (modèles, clés API) |
 | `--model` | `opencode/big-pickle` | Modèle (répétable, dans l'ordre) |
 | `--timeout` | `1800` | Délai max par session (s) |
 | `--build` | — | Génère aussi `presentation.pptx` |
@@ -158,16 +159,54 @@ Pour ne régénérer que le PowerPoint depuis un `storyboard.json` existant :
 python build_pptx.py --in llm-output
 ```
 
+### 3. Choisir le modèle / connecter une API
+
+Par défaut, le script utilise les modèles **gratuits** d'OpenCode Zen, sans
+configuration. Pour utiliser un autre provider (payant), il y a deux méthodes —
+**ne mets jamais une clé API dans le script**.
+
+**a) Via `opencode auth login`** (le plus simple) : la clé est stockée par
+opencode dans `~/.local/share/opencode/auth.json`, puis :
+
+```bash
+python llm-process.py --model anthropic/claude-sonnet-4-5
+```
+
+**b) Via `config.json`** (gitignoré) : copie l'exemple et remplis-le.
+
+```bash
+cp config.example.json config.json
+```
+
+```json
+{
+  "models": ["anthropic/claude-sonnet-4-5", "opencode/big-pickle"],
+  "env": {
+    "ANTHROPIC_API_KEY": "sk-ant-..."
+  }
+}
+```
+
+- `models` : liste essayée dans l'ordre, le premier qui répond gagne. Le dernier
+  peut rester un modèle gratuit comme filet de sécurité.
+- `env` : variables d'environnement passées à la session opencode (noms des
+  clés selon le provider : `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
+  `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`…).
+
+`config.json` et `.env` sont **ignorés par Git** ; seul
+`config.example.json` est versionné.
+
 ## Feuille de route
 
 - [x] Extraction texte, figures, tables et légendes
 - [x] Storyboard + voiceover via LLM (opencode)
 - [x] Export PowerPoint (`.pptx`)
+- [x] Choix du modèle / de la clé API via `config.json`
 - [ ] Export vidéo avec voiceover
-- [ ] Choix du modèle / de l'agent en argument de configuration
+- [ ] Choix de l'agent opencode en argument
 
 ## Notes
 
-- `input-pdf/`, `paper-processed/`, `llm-output/` et les PDF (`*.pdf`) sont
-  ignorés par Git.
+- `input-pdf/`, `paper-processed/`, `llm-output/`, `config.json`, `.env` et les
+  PDF (`*.pdf`) sont ignorés par Git.
 - L'étape 1 est déterministe et sans LLM ; l'étape 2 est générative.

@@ -16,17 +16,26 @@ Prérequis : le binaire `opencode` doit être dans le PATH, et
 
 Usage :
     python llm-process.py [--paper paper-processed] [--out llm-output]
-                          [--prompt prompts/llm-process.md]
+                          [--prompt prompts/llm-process.md] [--config config.json]
                           [--model opencode/big-pickle] [--model ...]
                           [--timeout 1800] [--build] [--dry-run]
 
+    --config    config locale (modèles + clés API), ignorée par Git
     --build     lance aussi build_pptx.py pour générer llm-output/presentation.pptx
     --dry-run   affiche la commande sans exécuter la session (test rapide)
+
+Choix du modèle / de l'API :
+    Copie `config.example.json` en `config.json` (gitignoré), puis renseigne
+    `models` (liste, le premier disponible gagne) et, si tu utilises un
+    provider payant, ses clés dans `env`. Alternative sans fichier :
+    `opencode auth login` puis `--model provider/model`.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -39,6 +48,19 @@ DEFAULT_MODELS = [
     "opencode/nemotron-3-ultra-free",
     "opencode/ling-3.0-flash-fin-free",
 ]
+
+
+def load_config(path: Path) -> dict:
+    """Charge la config locale (modèles + variables d'environnement)."""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        sys.exit(f"Config invalide ({path}) : {exc}")
+    if not isinstance(data, dict):
+        sys.exit(f"Config invalide ({path}) : objet JSON attendu.")
+    return data
 
 
 def find_opencode() -> str:
@@ -66,9 +88,11 @@ def build_command(opencode: str, model: str, prompt: str, root: Path) -> list[st
     ]
 
 
-def run_session(cmd: list[str], log_path: Path, timeout: int) -> int:
+def run_session(cmd: list[str], log_path: Path, timeout: int,
+                extra_env: dict[str, str] | None = None) -> int:
     """Exécute la session en streamant la sortie vers la console et un log."""
     print("→", " ".join(cmd[:8]), "...")
+    env = {**os.environ, **(extra_env or {})}
     with log_path.open("w", encoding="utf-8") as log:
         try:
             proc = subprocess.Popen(
@@ -77,6 +101,7 @@ def run_session(cmd: list[str], log_path: Path, timeout: int) -> int:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=env,
             )
         except OSError as exc:
             print(f"  échec du lancement : {exc}")
@@ -117,8 +142,6 @@ def validate(out: Path) -> list[str]:
     if not storyboard.is_file():
         problems.append(f"manquant : {storyboard}")
     else:
-        import json
-
         try:
             data = json.loads(storyboard.read_text(encoding="utf-8"))
             slides = data.get("slides", [])
@@ -142,6 +165,8 @@ def main() -> None:
     ap.add_argument("--paper", type=Path, default=Path("paper-processed"))
     ap.add_argument("--out", type=Path, default=Path("llm-output"))
     ap.add_argument("--prompt", type=Path, default=Path("prompts/llm-process.md"))
+    ap.add_argument("--config", type=Path, default=Path("config.json"),
+                    help="config locale (modèles, clés API) — ignorée par Git")
     ap.add_argument(
         "--model",
         action="append",
@@ -168,12 +193,20 @@ def main() -> None:
 
     opencode = find_opencode()
     prompt = prompt_file.read_text(encoding="utf-8")
-    models = args.models or DEFAULT_MODELS
+    config_file = (
+        (root / args.config).resolve() if not args.config.is_absolute() else args.config
+    )
+    config = load_config(config_file)
+    models = args.models or config.get("models") or DEFAULT_MODELS
+    env_extra = {k: str(v) for k, v in (config.get("env") or {}).items() if v}
     log_path = out / "llm-session.log"
 
     print(f"paper    : {paper}")
     print(f"output   : {out}")
+    print(f"config   : {config_file if config else '(aucune)'}")
     print(f"modèles  : {', '.join(models)}")
+    if env_extra:
+        print(f"clés API : {', '.join(env_extra)} (depuis la config)")
 
     if args.dry_run:
         cmd = build_command(opencode, models[0], prompt, root)
@@ -186,7 +219,7 @@ def main() -> None:
     for i, model in enumerate(models, start=1):
         print(f"\n=== Tentative {i}/{len(models)} avec {model} ===")
         cmd = build_command(opencode, model, prompt, root)
-        code = run_session(cmd, log_path, args.timeout)
+        code = run_session(cmd, log_path, args.timeout, env_extra)
         if code != 0:
             print(f"  session terminée avec le code {code}, modèle suivant.")
             continue
