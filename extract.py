@@ -5,7 +5,7 @@ Objectif : produire une extraction BRUTE et traçable, sans chercher à
 interpréter. L'interprétation (sections, résumé, storyboard...) est laissée
 au LLM en aval.
 
-Sorties (dossier `paper/` par défaut) :
+Sorties (dossier `paper-processed/` par défaut) :
     text/full_text.md              texte dans l'ordre de lecture, avec
                                    marqueurs de page <!-- page N -->
     figures/<label>.png            une image par figure (nom = n° réel)
@@ -17,7 +17,9 @@ Sorties (dossier `paper/` par défaut) :
 Dépendances : PyMuPDF, Pillow. Optionnel : pdfplumber (meilleures tables).
 
 Usage :
-    python extract.py article.pdf [--out paper] [--dpi 300]
+    python extract.py [article.pdf] [--in input-pdf] [--out paper-processed] [--dpi 300]
+
+Si le PDF n'est pas fourni, l'unique PDF de `input-pdf/` est utilisé.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import datetime as dt
 import io
 import json
 import re
+import sys
 from pathlib import Path
 
 import pymupdf
@@ -480,14 +483,30 @@ def run(pdf: Path, out: Path, dpi: int) -> dict:
     return metadata
 
 
+def find_pdf(indir: Path) -> Path:
+    pdfs = sorted(indir.glob("*.pdf"))
+    if not pdfs:
+        sys.exit(f"Aucun PDF dans {indir}/ — dépose un fichier .pdf ou passe son chemin.")
+    if len(pdfs) > 1:
+        names = ", ".join(p.name for p in pdfs)
+        sys.exit(f"Plusieurs PDF dans {indir}/ : {names}\nPrécise lequel en argument.")
+    return pdfs[0]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Extraction générique PDF -> texte/figures/tables")
-    ap.add_argument("pdf", type=Path)
-    ap.add_argument("--out", type=Path, default=Path("paper"))
+    ap.add_argument("pdf", type=Path, nargs="?", help="PDF source (défaut : unique PDF de --in)")
+    ap.add_argument("--in", dest="indir", type=Path, default=Path("input-pdf"),
+                    help="Dossier des PDF d'entrée")
+    ap.add_argument("--out", type=Path, default=Path("paper-processed"))
     ap.add_argument("--dpi", type=int, default=300)
     args = ap.parse_args()
 
-    meta = run(args.pdf, args.out, args.dpi)
+    pdf = args.pdf if args.pdf is not None else find_pdf(args.indir)
+    if not pdf.is_file():
+        sys.exit(f"PDF introuvable : {pdf}")
+
+    meta = run(pdf, args.out, args.dpi)
     print(f"texte    -> {args.out / 'text' / 'full_text.md'}")
     print(f"figures  -> {len(meta['figures'])}")
     print(f"tables   -> {len(meta['tables'])}")

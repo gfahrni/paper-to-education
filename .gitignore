@@ -1,8 +1,11 @@
-# Test PDF
-*.pdf
+# Input PDFs
+input-pdf/
 
 # Extraction output
-paper/
+paper-processed/
+
+# LLM output (storyboard, voiceover, pptx)
+llm-output/
 
 # macOS
 .DS_Store
