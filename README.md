@@ -75,6 +75,28 @@ llm-output/
 - Le prompt qui pilote la session est versionné dans
   `prompts/llm-process.md`.
 
+## Prérequis
+
+- **Python 3.10+**.
+- **opencode** (pour l'étape 2) installé et disponible dans le `PATH` :
+
+  ```bash
+  curl -fsSL https://opencode.ai/install | bash   # macOS / Linux
+  # ou
+  brew install anomalyco/tap/opencode
+  ```
+
+- Un provider configuré dans opencode. Le script utilise par défaut des modèles
+  **gratuits** ; connecte un provider une fois avec `opencode auth login` (ou
+  `/connect` dans le TUI opencode), puis vérifie :
+
+  ```bash
+  opencode models | grep big-pickle
+  ```
+
+  Si le premier modèle est indisponible, `llm-process.py` bascule
+  automatiquement sur les autres modèles gratuits.
+
 ## Installation
 
 ```bash
@@ -88,9 +110,6 @@ pip install pymupdf pillow python-pptx
 ```bash
 pip install pdfplumber
 ```
-
-`llm-process.py` nécessite le binaire **opencode** dans le `PATH`
-(voir https://opencode.ai/docs/).
 
 ## Utilisation
 
