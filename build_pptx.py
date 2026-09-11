@@ -264,6 +264,40 @@ def embed_audio(slide, mp3: Path) -> None:
     set_autoplay(shape)
 
 
+def audio_duration_ms(path: Path) -> int | None:
+    """Durée d'un mp3 en millisecondes via ffprobe (None si indisponible)."""
+    if not shutil.which("ffprobe"):
+        return None
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return int(float(out) * 1000)
+    except (subprocess.CalledProcessError, ValueError):
+        return None
+
+
+def set_advance_after(slide, ms: int) -> None:
+    """Pose « avancer après N ms » sur la slide (transition p:transition/advTm).
+
+    python-pptx n'expose pas les transitions ; on insère l'élément au bon
+    endroit du XML (après cSld/clrMapOvr, avant p:timing).
+    """
+    sld = slide._element
+    for old in sld.findall(qn("p:transition")):
+        sld.remove(old)
+    transition = sld.makeelement(qn("p:transition"), {})
+    transition.set("advTm", str(int(ms)))
+    transition.set("advClick", "1")
+    timing = sld.find(qn("p:timing"))
+    if timing is not None:
+        timing.addprevious(transition)
+    else:
+        sld.append(transition)
+
+
 # ---------------------------------------------------------------------------
 # Rendu des slides
 # ---------------------------------------------------------------------------
@@ -397,6 +431,12 @@ def build(data: dict, out_path: Path, root: Path, audio_cfg: dict | None = None)
                     apply_speed(mp3, audio_cfg["speed"])
             if mp3.is_file():
                 embed_audio(slide, mp3)
+                if audio_cfg.get("advance"):
+                    ms = audio_duration_ms(mp3)
+                    if ms:
+                        set_advance_after(slide, ms + audio_cfg.get("advance_buffer", 600))
+                    else:
+                        print("  durée audio illisible (ffprobe manquant ?) : avance auto ignorée.")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out_path))
@@ -434,6 +474,10 @@ def main() -> None:
                     help="dossier des mp3 (défaut : <in>/audio)")
     ap.add_argument("--keep-audio", action="store_true",
                     help="réutilise les mp3 existants au lieu de les régénérer")
+    ap.add_argument("--advance", action="store_true",
+                    help="en diaporama, avance à la slide suivante à la fin du voiceover")
+    ap.add_argument("--advance-buffer", type=int, default=600,
+                    help="délai après l'audio avant d'avancer (ms, défaut 600)")
     ap.add_argument("--config", type=Path, default=Path("config.json"),
                     help="config locale (champ env : clés API) — ignorée par Git")
     ap.add_argument("--list-voices", action="store_true",
@@ -520,13 +564,16 @@ def main() -> None:
             "keep": args.keep_audio,
             "model_id": args.tts_model,
             "api_key": api_key,
+            "advance": args.advance,
+            "advance_buffer": args.advance_buffer,
         }
 
     n = build(data, outfile, root, audio_cfg)
     print(f"{n} slides -> {outfile}")
     if audio_cfg:
+        extra = ", avance auto en fin de voix" if audio_cfg.get("advance") else ""
         print(f"voiceover -> {audio_cfg['dir']} "
-              f"({audio_cfg['tts']}, voix {audio_cfg['voice']}, lecture automatique)")
+              f"({audio_cfg['tts']}, voix {audio_cfg['voice']}, lecture automatique{extra})")
 
 
 if __name__ == "__main__":

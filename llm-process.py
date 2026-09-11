@@ -26,6 +26,7 @@ Usage :
     --tts       say (macOS, défaut) ou elevenlabs (voix humaines, clé API requise)
     --voice     nom/id de voix (ElevenLabs) ou voix macOS pour --tts say
     --speed     vitesse de lecture (défaut ElevenLabs : 1.25)
+    --advance   en diaporama, avance à la fin du voiceover de chaque slide
     --dry-run   affiche la commande sans exécuter la session (test rapide)
 
 Choix du modèle / de l'API :
@@ -190,6 +191,8 @@ def main() -> None:
     ap.add_argument("--rate", type=int, default=180, help="débit say (mots/minute)")
     ap.add_argument("--speed", type=float, default=None,
                     help="vitesse de lecture (défaut ElevenLabs : 1.25)")
+    ap.add_argument("--advance", action="store_true",
+                    help="en diaporama, avance à la slide suivante à la fin du voiceover")
     ap.add_argument("--dry-run", action="store_true", help="n'exécute pas la session")
     args = ap.parse_args()
 
@@ -263,6 +266,8 @@ def main() -> None:
             build_cmd += ["--audio", "--rate", str(args.rate)]
         if args.speed is not None:
             build_cmd += ["--speed", str(args.speed)]
+        if args.advance:
+            build_cmd += ["--advance"]
         code = subprocess.run(build_cmd, env={**os.environ, **env_extra}).returncode
         if code != 0:
             sys.exit("Échec de build_pptx.py")

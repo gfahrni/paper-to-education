@@ -291,10 +291,17 @@ make pptx
 | `--speed` | `1.25` (ElevenLabs) / `1.0` | Vitesse de lecture (hauteur conservée) |
 | `--audio-dir` | `llm-output/audio` | Dossier des mp3 |
 | `--keep-audio` | — | Réutilise les mp3 existants (pas de régénération) |
+| `--advance` | — | En diaporama, avance à la fin du voiceover de la slide |
+| `--advance-buffer` | `600` | Délai après l'audio avant d'avancer (ms) |
 
 La vitesse (`--speed`) est appliquée par ffmpeg (`atempo`) sans modifier la
 hauteur de la voix ; ElevenLabs est à `1.25` par défaut, `say` à `1.0`
 (utiliser `--rate` dans ce cas).
+
+Avec `--advance`, la durée de chaque mp3 (mesurée par `ffprobe`) est inscrite
+dans la transition de la slide (« avancer après N ms ») : en diaporama, le
+voiceover se lance puis la slide suivante s'affiche automatiquement à la fin
+(+ `--advance-buffer` ms de marge). `make pptx` active déjà `--advance`.
 
 Limite : le découpage reste **par slide** ; sauter à un paragraphe précis du
 voiceover n'est pas géré nativement par PowerPoint.
