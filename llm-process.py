@@ -23,6 +23,9 @@ Usage :
     --config    config locale (modèles + clés API), ignorée par Git
     --build     lance aussi build_pptx.py pour générer llm-output/presentation.pptx
     --audio     avec --build : ajoute un voiceover TTS en lecture automatique
+    --tts       say (macOS, défaut) ou elevenlabs (voix humaines, clé API requise)
+    --voice     nom/id de voix (ElevenLabs) ou voix macOS pour --tts say
+    --speed     vitesse de lecture (défaut ElevenLabs : 1.25)
     --dry-run   affiche la commande sans exécuter la session (test rapide)
 
 Choix du modèle / de l'API :
@@ -178,8 +181,15 @@ def main() -> None:
     ap.add_argument("--build", action="store_true", help="génère aussi le .pptx")
     ap.add_argument("--audio", action="store_true",
                     help="avec --build : voiceover TTS en lecture automatique par slide")
-    ap.add_argument("--voice", default="Thomas", help="voix TTS macOS (say -v)")
-    ap.add_argument("--rate", type=int, default=180, help="débit TTS (mots/minute)")
+    ap.add_argument("--tts", choices=["say", "elevenlabs"], default="say",
+                    help="moteur TTS (défaut : say macOS)")
+    ap.add_argument("--voice", default=None,
+                    help="voix : nom/id ElevenLabs, ou voix macOS pour --tts say")
+    ap.add_argument("--tts-model", default="eleven_multilingual_v2",
+                    help="modèle ElevenLabs")
+    ap.add_argument("--rate", type=int, default=180, help="débit say (mots/minute)")
+    ap.add_argument("--speed", type=float, default=None,
+                    help="vitesse de lecture (défaut ElevenLabs : 1.25)")
     ap.add_argument("--dry-run", action="store_true", help="n'exécute pas la session")
     args = ap.parse_args()
 
@@ -243,15 +253,22 @@ def main() -> None:
 
     if args.build:
         print("\n=== Génération du PowerPoint ===")
-        build_cmd = [sys.executable, str(root / "build_pptx.py"), "--in", str(out)]
+        build_cmd = [
+            sys.executable, str(root / "build_pptx.py"), "--in", str(out),
+            "--tts", args.tts, "--tts-model", args.tts_model,
+        ]
+        if args.voice:
+            build_cmd += ["--voice", args.voice]
         if args.audio:
-            build_cmd += ["--audio", "--voice", args.voice, "--rate", str(args.rate)]
-        code = subprocess.run(build_cmd).returncode
+            build_cmd += ["--audio", "--rate", str(args.rate)]
+        if args.speed is not None:
+            build_cmd += ["--speed", str(args.speed)]
+        code = subprocess.run(build_cmd, env={**os.environ, **env_extra}).returncode
         if code != 0:
             sys.exit("Échec de build_pptx.py")
         print(f"PowerPoint : {out / 'presentation.pptx'}")
         if args.audio:
-            print(f"Voiceover  : {out / 'audio'} (lecture automatique)")
+            print(f"Voiceover  : {out / 'audio'} ({args.tts}, lecture automatique)")
 
 
 if __name__ == "__main__":

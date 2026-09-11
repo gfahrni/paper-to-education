@@ -114,6 +114,23 @@ pip install pdfplumber
 
 ## Utilisation
 
+### Raccourcis (Makefile)
+
+Les étapes courantes sont encapsulées dans le `Makefile` (voix ElevenLabs
+`George` par défaut) :
+
+```bash
+make            # affiche l'aide
+make extract    # PDF -> paper-processed/
+make storyboard # paper-processed/ -> llm-output/ (storyboard + voiceover)
+make pptx       # llm-output/ -> presentation.pptx + voiceover ElevenLabs
+make preview    # écoute un échantillon de la voix
+
+make pptx VOICE=Alice       # surcharge la voix
+make pptx SPEED=1.0         # vitesse normale
+make pptx VOICE=Alice SPEED=1.1
+```
+
 ### 1. Extraire le PDF
 
 Dépose le PDF dans `input-pdf/`, puis :
@@ -139,6 +156,9 @@ python llm-process.py [--paper paper-processed] [--out llm-output] [--build]
 | `--model` | `opencode/big-pickle` | Modèle (répétable, dans l'ordre) |
 | `--timeout` | `1800` | Délai max par session (s) |
 | `--build` | — | Génère aussi `presentation.pptx` |
+| `--audio` | — | Avec `--build` : voiceover TTS (lecture auto) |
+| `--tts` | `say` | Moteur : `say` (macOS) ou `elevenlabs` |
+| `--voice` | selon `--tts` | Voix ElevenLabs (nom/id) ou voix macOS |
 | `--dry-run` | — | Affiche la commande sans exécuter la session |
 
 Exemple complet :
@@ -204,23 +224,80 @@ et intégré au `.pptx` en **lecture automatique** : en diaporama, avancer ou
 reculer déclenche le voiceover de la slide affichée (et donc le rejoue si tu
 reviens en arrière).
 
+Deux moteurs, via `--tts` :
+
+| `--tts` | Qualité | Dépendances | Voix |
+| --- | --- | --- | --- |
+| `say` (défaut) | robotique | macOS `say` + `ffmpeg` | `Thomas`, `Amélie`… (`say -v '?'`) |
+| `elevenlabs` | voix humaines très naturelles | clé API ElevenLabs | nom ou id de voix |
+
 ```bash
+# Voix macOS (gratuit, hors-ligne)
 python llm-process.py --build --audio
-# ou, sur un storyboard existant :
-python build_pptx.py --in llm-output --audio
+
+# Voix humaines ElevenLabs (voix par défaut : George)
+python llm-process.py --build --audio --tts elevenlabs
+
+# Sur un storyboard existant
+python build_pptx.py --in llm-output --audio --tts elevenlabs --voice George
+
+# Raccourci équivalent (voir Makefile)
+make pptx
 ```
+
+#### Configurer ElevenLabs
+
+1. Crée un compte sur elevenlabs.io, puis récupère ta clé API (Profil → API key).
+2. Ajoute-la dans `config.json` (gitignoré) :
+
+   ```json
+   {
+     "env": { "ELEVENLABS_API_KEY": "sk_..." }
+   }
+   ```
+
+   ou exporte-la : `export ELEVENLABS_API_KEY=sk_...`.
+3. Liste les voix de ton compte et écoute-les :
+
+   ```bash
+   # noms, ids et lien d'écoute fourni par ElevenLabs (gratuit)
+   python build_pptx.py --tts elevenlabs --list-voices
+
+   # échantillon en français de chaque voix, joué localement (consomme des crédits)
+   python build_pptx.py --tts elevenlabs --preview
+
+   # seulement quelques voix, avec ton propre texte
+   python build_pptx.py --tts elevenlabs --voice "Alice,Matilda,River" \
+       --preview "Voici comment j'explique un mécanisme physiopathologique."
+   ```
+
+   Les échantillons sont écrits dans `llm-output/voice-preview/` (réécoutables
+   avec `afplay <fichier>`). Les voix natives françaises de la **Voice Library**
+   donnent le meilleur résultat ; `--voice` accepte un nom ou un `voice_id`.
+
+- Modèle par défaut : `eleven_multilingual_v2` (naturel). Pour économiser les
+  crédits : `--tts-model eleven_flash_v2_5`.
+- L'offre gratuite est limitée (≈ 10 000 caractères/mois) : un run complet de
+  14 slides la consomme presque entièrement. Utilise `--keep-audio` pour ne pas
+  régénérer les mp3 déjà présents.
 
 | Option | Défaut | Description |
 | --- | --- | --- |
 | `--audio` | — | Génère et intègre le voiceover TTS (lecture auto) |
-| `--voice` | `Thomas` | Voix macOS (`say -v '?'` pour lister, ex. `Amélie`) |
-| `--rate` | `180` | Débit de parole (mots/minute) |
+| `--tts` | `say` | `say` (macOS) ou `elevenlabs` |
+| `--voice` | `Thomas` / `George` | Voix macOS ou nom/id ElevenLabs |
+| `--tts-model` | `eleven_multilingual_v2` | Modèle ElevenLabs |
+| `--rate` | `180` | Débit `say` (mots/minute) |
+| `--speed` | `1.25` (ElevenLabs) / `1.0` | Vitesse de lecture (hauteur conservée) |
 | `--audio-dir` | `llm-output/audio` | Dossier des mp3 |
 | `--keep-audio` | — | Réutilise les mp3 existants (pas de régénération) |
 
-Le TTS utilise la commande macOS **`say`** (gratuite, hors-ligne) puis **ffmpeg**
-pour convertir en mp3. Limite : le découpage reste **par slide** ; sauter à un
-paragraphe précis du voiceover n'est pas géré nativement par PowerPoint.
+La vitesse (`--speed`) est appliquée par ffmpeg (`atempo`) sans modifier la
+hauteur de la voix ; ElevenLabs est à `1.25` par défaut, `say` à `1.0`
+(utiliser `--rate` dans ce cas).
+
+Limite : le découpage reste **par slide** ; sauter à un paragraphe précis du
+voiceover n'est pas géré nativement par PowerPoint.
 
 ## Feuille de route
 
@@ -228,6 +305,7 @@ paragraphe précis du voiceover n'est pas géré nativement par PowerPoint.
 - [x] Storyboard + voiceover via LLM (opencode)
 - [x] Export PowerPoint (`.pptx`)
 - [x] Voiceover TTS en lecture automatique par slide
+- [x] Moteur TTS ElevenLabs (voix humaines) en plus de `say`
 - [x] Choix du modèle / de la clé API via `config.json`
 - [ ] Export vidéo MP4 (slides + voix off)
 - [ ] Choix de l'agent opencode en argument
