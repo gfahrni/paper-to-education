@@ -1,89 +1,58 @@
 # pdf-to-education
 
-Transformer un PDF scientifique en matériel pédagogique.
+Transformer un PDF d'article scientifique en **présentation pédagogique
+PowerPoint avec voix off**.
 
-## Vision
+Le projet prend un PDF en entrée et produit un `.pptx` prêt à présenter :
+texte résumé par un LLM, figures et tables conservées en image, et un voiceover
+TTS en lecture automatique par slide. La chaîne va de bout en bout :
 
-À terme, l'objectif est de générer automatiquement un **PowerPoint** ou une
-**vidéo éducative** qui mélange :
-
-- du **texte résumé** (généré par un LLM),
-- des **figures et tables** conservées en **image**,
-- une **voix off** (voiceover).
-
-Le projet avance par étapes :
-
-1. **Extraction PDF** — fragmente le PDF en texte, figures, tables et légendes
-   de façon brute et traçable (`extract.py`).
-2. **Interprétation LLM** — une session opencode lit l'extraction et produit un
-   storyboard de slides + un voiceover (`llm-process.py`), puis un `.pptx`
-   (`build_pptx.py`).
-3. *(à venir)* export vidéo avec la voix off.
-
-## Convention des dossiers
-
-```
-input-pdf/        PDF source déposé à la main
-paper-processed/  extraction brute (étape 1)
-llm-output/       storyboard, voiceover et .pptx (étape 2)
+```text
+input-pdf/article.pdf
+        │  extract.py
+        ▼
+paper-processed/        texte, figures, tables, légendes (brut et traçable)
+        │  llm-process.py (session opencode)
+        ▼
+llm-output/             storyboard.json + voiceover.md
+        │  build_pptx.py (+ TTS)
+        ▼
+llm-output/presentation.pptx   slides + images + voiceover
 ```
 
-## Étape 1 — Extraction PDF (`extract.py`)
+## Ce que le projet sait faire
 
-`extract.py` fragmente un PDF sans chercher à l'interpréter :
+- **Extraction fidèle** : texte reconstruit dans l'ordre de lecture (colonnes,
+  césures, lettrines), figures extraites en image, tables rendues en image +
+  texte brut, légendes appariées, index JSON de traçabilité.
+- **Storyboard généré par LLM** : une session opencode non-interactive lit
+  l'extraction et écrit un plan de slides (titres, puces, image associée) et un
+  commentaire oral par slide.
+- **PowerPoint 16:9** : mise en page automatique (titre, puces, image, légende),
+  voiceover en notes du présentateur.
+- **Voiceover intégré** : audio TTS par slide, en lecture automatique, avec
+  moteur local (`mlx-audio`, voix humaines FR) ou `say` macOS (hors-ligne).
+- **Modèles gratuits par défaut** avec repli automatique, ou provider payant via
+  `config.json` / `opencode auth login`.
 
-- **Texte** : reconstruit dans l'ordre de lecture (gestion des colonnes,
-  recollage des césures, lettrines), avec des marqueurs `<!-- page N -->`.
-- **Boilerplate** : en-têtes, pieds de page et filigranes répétés sont
-  détectés et supprimés.
-- **Figures** : extraites en image, soit l'image native du PDF, soit un
-  recadrage de page en haute résolution (300 dpi par défaut).
-- **Tables** : rendues en image + tentative d'extraction texte brute.
-- **Légendes** : chaque figure/table est appariée à sa légende.
-- **Traçabilité** : un index JSON recense page, bbox, méthode et fichiers
-  produits pour chaque élément.
+## Modules
 
-Sorties par défaut dans `paper-processed/` :
+| Script | Rôle | Sortie |
+| --- | --- | --- |
+| `extract.py` | fragmente le PDF sans l'interpréter | `paper-processed/` |
+| `llm-process.py` | pilote la session LLM (opencode) | `llm-output/storyboard.json`, `voiceover.md` |
+| `build_pptx.py` | construit le PPT (+ TTS) | `llm-output/presentation.pptx`, `audio/` |
 
-```
-paper-processed/
-├── text/full_text.md          # texte complet, ordre de lecture, <!-- page N -->
-├── figures/<label>.png        # une image par figure (nom = n° réel)
-├── tables/<label>.png         # table rendue en image
-├── tables/<label>.md          # table en texte brut (best effort)
-├── captions/<label>.txt       # légende associée à la figure/table
-└── metadata/extraction.json   # index complet (page, bbox, méthode…)
-```
+Le prompt qui pilote le LLM est versionné dans `prompts/llm-process.md`.
 
-## Étape 2 — Interprétation LLM (`llm-process.py`)
-
-`llm-process.py` lance une **session opencode non-interactive** qui lit
-`paper-processed/` et produit :
-
-```
-llm-output/
-├── storyboard.json            # plan du PPT : slides, puces, image, voiceover
-├── voiceover.md               # commentaire oral par slide
-├── audio/slide_NN.mp3         # voiceover TTS (si --audio)
-├── llm-session.log            # trace complète de la session
-└── presentation.pptx          # généré par build_pptx.py
-```
-
-- Modèle par défaut : `opencode/big-pickle` (gratuit), avec **repli automatique**
-  sur d'autres modèles gratuits si indisponible.
-- La session a accès aux outils de lecture/écriture : elle lit elle-même
-  `paper-processed/` et écrit `llm-output/`.
-- Le prompt qui pilote la session est versionné dans
-  `prompts/llm-process.md`.
-
-## Ce qu'il faut avoir
+## Prérequis
 
 | Composant | Utile pour | Obligatoire |
 | --- | --- | --- |
-| **macOS sur Apple Silicon** | voiceover TTS local (`mlx`) et `say` | seulement pour le voiceover |
 | **Python 3.10+** | tout le pipeline | oui |
+| **opencode** + un provider | génération du storyboard | oui |
 | **ffmpeg** | convertir / accélérer l'audio | oui pour le voiceover |
-| **opencode** + un provider | étape 2 (storyboard + voiceover) | oui |
+| **macOS sur Apple Silicon** | TTS local (`mlx`) et `say` | seulement pour le voiceover |
 | **uv** | installer le serveur TTS local | oui pour `--tts mlx` |
 | **Homebrew** | installer `ffmpeg`, `uv`, `opencode` | recommandé (macOS) |
 
@@ -98,11 +67,11 @@ llm-output/
 ```bash
 brew install ffmpeg uv
 
-# opencode (étape 2)
+# opencode
 curl -fsSL https://opencode.ai/install | bash   # ou : brew install anomalyco/tap/opencode
 ```
 
-### 2. Environnement Python du projet
+### 2. Environnement Python
 
 ```bash
 python3 -m venv .venv
@@ -135,16 +104,14 @@ cp tts.example.json tts.json   # ajuste ensuite voix / modèle si besoin
 ```
 
 `uv tool` expose `mlx_audio.*` dans `~/.local/bin` sans toucher à ton Python.
-Détails (modèles, voix, cycle de vie du serveur) :
-[Voiceover automatique](#4-voiceover-automatique-dans-le-ppt).
-
+Détails (modèles, voix, cycle de vie du serveur) : [Voiceover](#voiceover).
 
 ## Utilisation
 
 ### Raccourcis (Makefile)
 
-Les étapes courantes sont encapsulées dans le `Makefile` (voix locale Voxtral
-`fr_female`, serveur TTS démarré/arrêté automatiquement) :
+Les opérations courantes sont encapsulées dans le `Makefile` (voix locale
+Voxtral `fr_female`, serveur TTS démarré/arrêté automatiquement) :
 
 ```bash
 make            # affiche l'aide
@@ -159,21 +126,33 @@ make pptx SPEED=1.1       # vitesse de lecture
 make pptx TTS=say         # repli sur la voix macOS (hors-ligne, robotique)
 ```
 
-### 1. Extraire le PDF
+### Pipeline manuel
 
 Dépose le PDF dans `input-pdf/`, puis :
 
 ```bash
+# 1. extraction PDF
 python extract.py [article.pdf] [--in input-pdf] [--out paper-processed] [--dpi 300]
+
+# 2. storyboard + voiceover (session LLM) + PPT (+ audio)
+python llm-process.py --build --audio
+
+# ou seulement le PowerPoint depuis un storyboard existant
+python build_pptx.py --in llm-output
 ```
 
-Sans argument, le script prend l'unique PDF de `input-pdf/`.
+Sans argument, `extract.py` prend l'unique PDF de `input-pdf/`.
 
-### 2. Générer le storyboard + voiceover (et le PPT)
+#### `extract.py`
 
-```bash
-python llm-process.py [--paper paper-processed] [--out llm-output] [--build]
-```
+| Option | Défaut | Description |
+| --- | --- | --- |
+| `pdf` (positionnel) | unique PDF de `input-pdf/` | PDF source |
+| `--in` | `input-pdf` | Dossier du PDF |
+| `--out` | `paper-processed` | Dossier de sortie |
+| `--dpi` | `300` | Résolution des recadrages de page |
+
+#### `llm-process.py`
 
 | Option | Défaut | Description |
 | --- | --- | --- |
@@ -206,13 +185,7 @@ Pour tester sans consommer de modèle :
 python llm-process.py --dry-run
 ```
 
-Pour ne régénérer que le PowerPoint depuis un `storyboard.json` existant :
-
-```bash
-python build_pptx.py --in llm-output
-```
-
-### 3. Choisir le modèle / connecter une API
+### Choisir le modèle / connecter une API
 
 Par défaut, le script utilise les modèles **gratuits** d'OpenCode Zen, sans
 configuration. Pour utiliser un autre provider (payant), il y a deux méthodes —
@@ -246,10 +219,10 @@ cp config.example.json config.json
   clés selon le provider : `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`…).
 
-`config.json` et `.env` sont **ignorés par Git** ; seul
-`config.example.json` est versionné.
+`config.json` et `.env` sont **ignorés par Git** ; seul `config.example.json`
+est versionné.
 
-### 4. Voiceover automatique dans le PPT
+## Voiceover
 
 Avec `--audio`, un fichier TTS est généré depuis le `voiceover` de chaque slide
 et intégré au `.pptx` en **lecture automatique** : en diaporama, avancer ou
@@ -274,7 +247,7 @@ python build_pptx.py --in llm-output --audio --tts mlx --advance
 python llm-process.py --build --audio --tts say
 ```
 
-#### Serveur TTS local (`mlx-audio`)
+### Serveur TTS local (`mlx-audio`)
 
 Le moteur `mlx` appelle un **serveur local compatible OpenAI**
 (`mlx_audio.server`), gratuit et hors-ligne, qui fait tourner
@@ -319,8 +292,12 @@ Avec `serve: true` (ou `--serve-tts`), `build_pptx.py` gère le cycle de vie :
 
 Pour le lancer/le garder en manuel : `make serve-tts`.
 
+### Options de `build_pptx.py`
+
 | Option | Défaut | Description |
 | --- | --- | --- |
+| `--in` | `llm-output` | Dossier du `storyboard.json` |
+| `--out` | `<in>/presentation.pptx` | Fichier `.pptx` de sortie |
 | `--audio` | — | Génère et intègre le voiceover TTS (lecture auto) |
 | `--tts` | `say` | `mlx` (serveur local) ou `say` (macOS) |
 | `--tts-config` | `tts.json` | Config du serveur TTS local |
@@ -332,7 +309,7 @@ Pour le lancer/le garder en manuel : `make serve-tts`.
 | `--tts-lang` | `fr` | Code langue du serveur local |
 | `--rate` | `180` | Débit `say` (mots/minute) |
 | `--speed` | `1.0` | Vitesse de lecture (hauteur conservée) |
-| `--audio-dir` | `llm-output/audio` | Dossier des mp3 |
+| `--audio-dir` | `<in>/audio` | Dossier des mp3 |
 | `--keep-audio` | — | Réutilise les mp3 existants (pas de régénération) |
 | `--advance` | — | En diaporama, avance à la fin du voiceover de la slide |
 | `--advance-buffer` | `600` | Délai après l'audio avant d'avancer (ms) |
@@ -349,20 +326,34 @@ Limite : le découpage reste **par slide** ; sauter à un paragraphe précis du
 voiceover n'est pas géré nativement par PowerPoint. Changer de voix ou de
 modèle régénère tout l'audio (sauf `--keep-audio`).
 
-## Feuille de route
+## Dossiers et sorties
 
-- [x] Extraction texte, figures, tables et légendes
-- [x] Storyboard + voiceover via LLM (opencode)
-- [x] Export PowerPoint (`.pptx`)
-- [x] Voiceover TTS en lecture automatique par slide
-- [x] Moteur TTS local (`mlx-audio`, Voxtral FR) avec gestion auto du serveur
-- [x] Choix du modèle / de la clé API via `config.json`
-- [ ] Export vidéo MP4 (slides + voix off)
-- [ ] Choix de l'agent opencode en argument
+```text
+input-pdf/        PDF source déposé à la main            (gitignoré)
+paper-processed/  extraction brute                       (gitignoré)
+llm-output/       storyboard, voiceover, audio, .pptx    (gitignoré)
+```
+
+```text
+paper-processed/
+├── text/full_text.md          # texte complet, ordre de lecture, <!-- page N -->
+├── figures/<label>.png        # une image par figure (nom = n° réel)
+├── tables/<label>.png         # table rendue en image
+├── tables/<label>.md          # table en texte brut (best effort)
+├── captions/<label>.txt       # légende associée à la figure/table
+└── metadata/extraction.json   # index complet (page, bbox, méthode…)
+
+llm-output/
+├── storyboard.json            # plan du PPT : slides, puces, image, voiceover
+├── voiceover.md               # commentaire oral par slide
+├── audio/slide_NN.mp3         # voiceover TTS (si --audio)
+├── llm-session.log            # trace complète de la session
+└── presentation.pptx          # généré par build_pptx.py
+```
 
 ## Notes
 
 - `input-pdf/`, `paper-processed/`, `llm-output/`, `config.json`, `tts.json`,
   `.env` et les PDF (`*.pdf`) sont ignorés par Git.
-- L'étape 1 est déterministe et sans LLM ; l'étape 2 est générative.
+- L'extraction est déterministe et sans LLM ; le storyboard est génératif.
 - Le serveur TTS local est sans clé API ; la voix est figée dans `tts.json`.
