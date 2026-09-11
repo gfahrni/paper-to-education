@@ -1,0 +1,14 @@
+# Test PDF
+*.pdf
+
+# Extraction output
+paper/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
