@@ -22,6 +22,7 @@ Usage :
 
     --config    config locale (modèles + clés API), ignorée par Git
     --build     lance aussi build_pptx.py pour générer llm-output/presentation.pptx
+    --audio     avec --build : ajoute un voiceover TTS en lecture automatique
     --dry-run   affiche la commande sans exécuter la session (test rapide)
 
 Choix du modèle / de l'API :
@@ -175,6 +176,10 @@ def main() -> None:
     )
     ap.add_argument("--timeout", type=int, default=1800, help="délai max par session (s)")
     ap.add_argument("--build", action="store_true", help="génère aussi le .pptx")
+    ap.add_argument("--audio", action="store_true",
+                    help="avec --build : voiceover TTS en lecture automatique par slide")
+    ap.add_argument("--voice", default="Thomas", help="voix TTS macOS (say -v)")
+    ap.add_argument("--rate", type=int, default=180, help="débit TTS (mots/minute)")
     ap.add_argument("--dry-run", action="store_true", help="n'exécute pas la session")
     args = ap.parse_args()
 
@@ -238,12 +243,15 @@ def main() -> None:
 
     if args.build:
         print("\n=== Génération du PowerPoint ===")
-        code = subprocess.run(
-            [sys.executable, str(root / "build_pptx.py"), "--in", str(out)]
-        ).returncode
+        build_cmd = [sys.executable, str(root / "build_pptx.py"), "--in", str(out)]
+        if args.audio:
+            build_cmd += ["--audio", "--voice", args.voice, "--rate", str(args.rate)]
+        code = subprocess.run(build_cmd).returncode
         if code != 0:
             sys.exit("Échec de build_pptx.py")
         print(f"PowerPoint : {out / 'presentation.pptx'}")
+        if args.audio:
+            print(f"Voiceover  : {out / 'audio'} (lecture automatique)")
 
 
 if __name__ == "__main__":

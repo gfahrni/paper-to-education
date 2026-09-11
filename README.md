@@ -64,6 +64,7 @@ paper-processed/
 llm-output/
 ├── storyboard.json            # plan du PPT : slides, puces, image, voiceover
 ├── voiceover.md               # commentaire oral par slide
+├── audio/slide_NN.mp3         # voiceover TTS (si --audio)
 ├── llm-session.log            # trace complète de la session
 └── presentation.pptx          # généré par build_pptx.py
 ```
@@ -144,7 +145,7 @@ Exemple complet :
 
 ```bash
 python extract.py
-python llm-process.py --build
+python llm-process.py --build --audio
 ```
 
 Pour tester sans consommer de modèle :
@@ -196,13 +197,39 @@ cp config.example.json config.json
 `config.json` et `.env` sont **ignorés par Git** ; seul
 `config.example.json` est versionné.
 
+### 4. Voiceover automatique dans le PPT
+
+Avec `--audio`, un fichier TTS est généré depuis le `voiceover` de chaque slide
+et intégré au `.pptx` en **lecture automatique** : en diaporama, avancer ou
+reculer déclenche le voiceover de la slide affichée (et donc le rejoue si tu
+reviens en arrière).
+
+```bash
+python llm-process.py --build --audio
+# ou, sur un storyboard existant :
+python build_pptx.py --in llm-output --audio
+```
+
+| Option | Défaut | Description |
+| --- | --- | --- |
+| `--audio` | — | Génère et intègre le voiceover TTS (lecture auto) |
+| `--voice` | `Thomas` | Voix macOS (`say -v '?'` pour lister, ex. `Amélie`) |
+| `--rate` | `180` | Débit de parole (mots/minute) |
+| `--audio-dir` | `llm-output/audio` | Dossier des mp3 |
+| `--keep-audio` | — | Réutilise les mp3 existants (pas de régénération) |
+
+Le TTS utilise la commande macOS **`say`** (gratuite, hors-ligne) puis **ffmpeg**
+pour convertir en mp3. Limite : le découpage reste **par slide** ; sauter à un
+paragraphe précis du voiceover n'est pas géré nativement par PowerPoint.
+
 ## Feuille de route
 
 - [x] Extraction texte, figures, tables et légendes
 - [x] Storyboard + voiceover via LLM (opencode)
 - [x] Export PowerPoint (`.pptx`)
+- [x] Voiceover TTS en lecture automatique par slide
 - [x] Choix du modèle / de la clé API via `config.json`
-- [ ] Export vidéo avec voiceover
+- [ ] Export vidéo MP4 (slides + voix off)
 - [ ] Choix de l'agent opencode en argument
 
 ## Notes
