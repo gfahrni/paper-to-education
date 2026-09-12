@@ -28,6 +28,9 @@ llm-output/presentation.pptx   slides + images + voiceover
 - **Storyboard généré par LLM** : une session opencode non-interactive lit
   l'extraction et écrit un plan de slides (titres, puces, image associée) et un
   commentaire oral par slide.
+- **Lecture critique** : la dernière slide porte un regard extérieur sur
+  l'article (claims *vs* données, biais non admis, angles morts, conflits
+  d'intérêts) sans répéter les limites déjà déclarées par les auteurs.
 - **PowerPoint 16:9** : mise en page automatique (titre, puces, image, légende),
   voiceover en notes du présentateur.
 - **Voiceover intégré** : audio TTS par slide, en lecture automatique, avec

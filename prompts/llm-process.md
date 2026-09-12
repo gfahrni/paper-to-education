@@ -104,8 +104,8 @@ Les textes de `voiceover.md` doivent être identiques à ceux du champ
   figures/tables ou sous-parties distinctes). Chaque slide doit porter une seule
   idée.
 - Structure pédagogique attendue : titre, contexte/motivation, objectif, points
-  clés, figures/tables importantes, implications cliniques, conclusion,
-  éventuellement limites.
+  clés, figures/tables importantes, implications cliniques, conclusion, puis une
+  **lecture critique** en dernière slide (voir « Lecture critique »).
 - Intègre les figures et tables **pertinentes** via le champ `image` : au moins
   2 slides de type `"image"` si l'article en contient.
 - Le voiceover est un **discours** : il explique, relie, nuance et prend
@@ -153,17 +153,45 @@ Bon — raconte et interprète :
 > Ce graphique compile plusieurs cohortes et le signal est constant. Pourquoi ?
 > On ne sait pas encore — et c'est une vraie question ouverte. »
 
+## Lecture critique (dernière slide)
+
+La dernière slide porte un **regard extérieur** sur l'article : ce n'est pas un
+résumé, c'est une évaluation. Réponds dans l'ordre à ces quatre questions :
+
+1. Les affirmations du titre, de l'abstract et de la conclusion sont-elles
+   réellement soutenues par les données ?
+2. Quelles faiblesses de conception ou quels biais les auteurs **n'admettent-ils
+   pas** ?
+3. Qu'est-ce que l'étude ne peut pas conclure, ou n'aborde pas, alors que le
+   lecteur en a besoin ?
+4. Y a-t-il des conflits d'intérêts (financement, liens industriels, brevets,
+   rôles des auteurs) qui limitent la crédibilité ?
+
+Règles :
+
+- Ne reprends pas une limite déjà déclarée, sauf pour montrer qu'elle est
+  **minimisée ou contredite ailleurs** dans l'article.
+- Ne retiens que ce qui **change la lecture** de l'article ; dans le voiceover,
+  garde **3 à 4 points maximum**, du plus grave au moins grave.
+- **S'il n'y a rien de solide** au-delà des limites déclarées, dis-le. N'invente
+  jamais une critique pour remplir la slide.
+- Chaque point s'appuie sur le texte de l'article : aucun chiffre absent de
+  l'article, aucune référence bibliographique inventée.
+- Prends position, sans accuser les auteurs.
+
 ## Méthode
 
 1. Lis `paper-processed/text/full_text.md` et `paper-processed/metadata/extraction.json`.
 2. Lis les légendes pertinentes dans `paper-processed/captions/`.
 3. Rédige le plan des slides, puis le voiceover de chaque slide dans le ton
    d'un discours (voir « Ton du voiceover »).
-4. **Relis chaque voiceover** : s'il commence par décrire une figure ou
+4. Termine par la **lecture critique** (voir « Lecture critique ») : 3-4 points
+   filtrés, rien qui soit déjà déclaré par les auteurs.
+5. **Relis chaque voiceover** : s'il commence par décrire une figure ou
    enchaîne des chiffres, réécris-le.
-5. Écris `llm-output/storyboard.json` (JSON valide, encodage UTF-8).
-6. Écris `llm-output/voiceover.md`.
-7. Vérifie que les deux fichiers existent, que le JSON est valide et que les
+6. Écris `llm-output/storyboard.json` (JSON valide, encodage UTF-8).
+7. Écris `llm-output/voiceover.md`.
+8. Vérifie que les deux fichiers existent, que le JSON est valide et que les
    voiceovers de `voiceover.md` sont identiques à ceux du JSON, puis affiche un
    court résumé (nombre de slides, images utilisées).
 
