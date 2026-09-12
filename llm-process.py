@@ -55,6 +55,8 @@ DEFAULT_MODELS = [
     "opencode/ling-3.0-flash-fin-free",
 ]
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 
 def load_config(path: Path) -> dict:
     """Charge la config locale (modèles + variables d'environnement)."""
@@ -170,8 +172,8 @@ def main() -> None:
     )
     ap.add_argument("--paper", type=Path, default=Path("paper-processed"))
     ap.add_argument("--out", type=Path, default=Path("llm-output"))
-    ap.add_argument("--prompt", type=Path, default=Path("prompts/llm-process.md"))
-    ap.add_argument("--config", type=Path, default=Path("config.json"),
+    ap.add_argument("--prompt", type=Path, default=SCRIPT_DIR / "prompts/llm-process.md")
+    ap.add_argument("--config", type=Path, default=SCRIPT_DIR / "config.json",
                     help="config locale (modèles, clés API) — ignorée par Git")
     ap.add_argument(
         "--model",
@@ -266,7 +268,7 @@ def main() -> None:
     if args.build:
         print("\n=== Génération du PowerPoint ===")
         build_cmd = [
-            sys.executable, str(root / "build_pptx.py"), "--in", str(out),
+            sys.executable, str(SCRIPT_DIR / "build_pptx.py"), "--in", str(out),
             "--tts", args.tts,
         ]
         if args.tts_model:

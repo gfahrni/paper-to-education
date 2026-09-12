@@ -12,6 +12,9 @@ config.json
 tts.json
 .env
 
+# Lanceur local (spécifique à la machine)
+pdf-to-education.command
+
 # macOS
 .DS_Store
 

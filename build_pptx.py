@@ -422,12 +422,12 @@ def build(data: dict, out_path: Path, root: Path, audio_cfg: dict | None = None)
             image = s.get("image")
             if image:
                 add_bullets(
-                    slide, bullets, Inches(0.6), Inches(1.6), Inches(5.6), Inches(5.2),
-                    size=16 if len(bullets) > 5 else 18,
+                    slide, bullets, Inches(0.6), Inches(1.6), Inches(3.8), Inches(5.2),
+                    size=15 if len(bullets) > 5 else 16,
                 )
-                add_image(slide, root / image, Inches(6.5), Inches(1.5), Inches(6.3), Inches(5.0))
+                add_image(slide, root / image, Inches(4.7), Inches(1.5), Inches(8.0), Inches(5.0))
                 if s.get("image_caption"):
-                    add_caption(slide, s["image_caption"], Inches(6.5), Inches(6.6), Inches(6.3))
+                    add_caption(slide, s["image_caption"], Inches(4.7), Inches(6.6), Inches(8.0))
             else:
                 add_bullets(
                     slide, bullets, Inches(0.8), Inches(1.6), SLIDE_W - Inches(1.6), Inches(5.2),
