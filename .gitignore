@@ -7,6 +7,9 @@ paper-processed/
 # LLM output (storyboard, voiceover, pptx)
 llm-output/
 
+# Logs d'exécution
+logs/
+
 # Local config / secrets
 config.json
 tts.json
