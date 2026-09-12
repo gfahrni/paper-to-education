@@ -38,6 +38,8 @@ llm-output/presentation.pptx   slides + images + voiceover
   Une **barre de progression** reste visible en bas de chaque slide et se met
   en pause avec `S` (pause du diaporama) ; les contrôles média PowerPoint et
   l'icône audio restent aussi accessibles au survol/clic.
+- **Nettoyage du burst TTS** : le petit bruit d'échauffement en tête des voix
+  Voxtral est retiré automatiquement (voir [Voiceover](#voiceover)).
 - **Modèles gratuits par défaut** avec repli automatique, ou provider payant via
   `config.json` / `opencode auth login`.
 
@@ -269,6 +271,19 @@ python build_pptx.py --in llm-output --audio --tts mlx --advance
 python llm-process.py --build --audio --tts say
 ```
 
+### Burst d'échauffement Voxtral (nettoyé par défaut)
+
+Le modèle Voxtral émet parfois, **au début** de la génération, un court bruit
+inintelligible suivi d'un silence de quelques dixièmes de seconde avant la
+vraie parole (bug connu du modèle, voir
+[discussion Mistral](https://huggingface.co/mistralai/Voxtral-4B-TTS-2603/discussions/20)).
+`build_pptx.py` détecte ce motif (burst isolé → silence → parole) et coupe le
+début parasite, avec `ffmpeg`, juste après la synthèse de chaque slide.
+
+C'est **activé par défaut** ; `--no-trim-warmup` le désactive. Le nettoyage ne
+s'applique qu'à l'audio fraîchement synthétisé : avec `--keep-audio`, les mp3
+existants sont réutilisés tels quels (donc jamais recoupés).
+
 ### Serveur TTS local (`mlx-audio`)
 
 Le moteur `mlx` appelle un **serveur local compatible OpenAI**
@@ -333,6 +348,7 @@ Pour le lancer/le garder en manuel : `make serve-tts`.
 | `--speed` | `1.0` | Vitesse de lecture (hauteur conservée) |
 | `--audio-dir` | `<in>/audio` | Dossier des mp3 |
 | `--keep-audio` | — | Réutilise les mp3 existants (pas de régénération) |
+| `--no-trim-warmup` | — | Ne pas couper le burst d'échauffement en tête des voix Voxtral |
 | `--advance` | — | En diaporama, avance à la fin du voiceover de la slide |
 | `--advance-buffer` | `600` | Délai après l'audio avant d'avancer (ms) |
 | `--no-media-controls` | — | Ne pas afficher la barre de contrôle média (play/pause, progression) |

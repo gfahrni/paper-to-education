@@ -28,7 +28,8 @@ Usage :
                          [--audio] [--tts say|mlx] [--voice Thomas]
                          [--speed 1.0] [--rate 180]
                          [--audio-dir llm-output/audio]
-                         [--keep-audio] [--tts-config tts.json] [--serve-tts]
+                         [--keep-audio] [--no-trim-warmup]
+                         [--tts-config tts.json] [--serve-tts]
                          [--no-media-controls] [--no-progress-bar]
 """
 
@@ -36,9 +37,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
 import time
@@ -264,6 +267,91 @@ def apply_speed(path: Path, speed: float) -> None:
         check=True,
     )
     tmp.replace(path)
+
+
+def _frame_db(samples: tuple, frame: int, hop: int) -> list[float]:
+    """Énergie RMS (dBFS) par fenêtre glissante."""
+    out = []
+    for i in range(0, len(samples) - frame, hop):
+        chunk = samples[i:i + frame]
+        rms = (sum(v * v for v in chunk) / len(chunk)) ** 0.5
+        out.append(20 * math.log10(rms / 32768) if rms > 0 else -99.0)
+    return out
+
+
+def detect_leading_artifact(
+    samples: tuple,
+    sr: int = 16000,
+    onset_max: float = 2.0,
+    gap_min: float = 0.20,
+    burst_max: float = 0.50,
+    min_speech: float = 0.30,
+) -> float | None:
+    """Repère un artefact TTS en tête : court burst isolé, silence, puis parole.
+
+    Renvoie l'instant (s) où commence la vraie parole s'il faut couper, sinon
+    None. Motif cherché : le premier silence >= `gap_min` survient avant
+    `onset_max` et le son qui le précède dure au plus `burst_max` (burst isolé),
+    suivi de parole soutenue. Les slides qui démarrent directement sur la parole
+    ne sont pas touchés.
+    """
+    frame, hop = int(0.020 * sr), int(0.010 * sr)
+    db = _frame_db(samples, frame, hop)
+    if not db:
+        return None
+    active = sorted(db)[int(0.90 * (len(db) - 1))]
+    threshold = max(active - 20.0, -50.0)
+    above = [d > threshold for d in db]
+    h = hop / sr
+    gap_start = gap_end = None
+    i = 0
+    while i < len(above):
+        if above[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(above) and not above[j]:
+            j += 1
+        if (j - i) * h >= gap_min and i * h <= onset_max:
+            gap_start, gap_end = i, j
+            break
+        i = j
+    if gap_start is None:
+        return None
+    after_frames = int(min_speech / h)
+    voiced_after = sum(above[gap_end:gap_end + after_frames])
+    voiced_before = sum(above[:gap_start]) * h
+    if voiced_after >= 0.6 * after_frames and 0.0 < voiced_before <= burst_max:
+        return gap_end * h
+    return None
+
+
+def trim_leading_artifact(path: Path, sr: int = 16000) -> float | None:
+    """Coupe un éventuel burst d'échauffement Voxtral en tête du mp3.
+
+    Renvoie l'offset (s) supprimé, ou None si aucun artefact n'est détecté.
+    """
+    if not shutil.which("ffmpeg"):
+        return None
+    path = Path(path)
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-t", "3",
+         "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"],
+        capture_output=True, check=True,
+    ).stdout
+    samples = struct.unpack("<%dh" % (len(raw) // 2), raw)
+    cut = detect_leading_artifact(samples, sr)
+    if cut is None:
+        return None
+    start = max(cut - 0.02, 0.0)
+    tmp = path.with_name(path.stem + ".trim" + path.suffix)
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start:.3f}",
+         "-i", str(path), "-c:a", "libmp3lame", "-b:a", "128k", str(tmp)],
+        check=True,
+    )
+    tmp.replace(path)
+    return start
 
 
 def set_autoplay(shape) -> None:
@@ -629,6 +717,10 @@ def build(data: dict, out_path: Path, root: Path, audio_cfg: dict | None = None)
                 print(f"  TTS slide {i} ({audio_cfg['tts']})…")
                 if synthesize(voiceover, mp3, audio_cfg):
                     apply_speed(mp3, audio_cfg["speed"])
+                    if audio_cfg.get("trim_warmup"):
+                        cut = trim_leading_artifact(mp3)
+                        if cut is not None:
+                            print(f"  échauffement TTS coupé slide {i} ({cut:.2f}s).")
             if mp3.is_file():
                 media_shape = embed_audio(slide, mp3)
                 need_ms = audio_cfg.get("advance") or audio_cfg.get("progress")
@@ -684,6 +776,8 @@ def main() -> None:
                     help="dossier des mp3 (défaut : <in>/audio)")
     ap.add_argument("--keep-audio", action="store_true",
                     help="réutilise les mp3 existants au lieu de les régénérer")
+    ap.add_argument("--no-trim-warmup", dest="trim_warmup", action="store_false",
+                    help="ne pas couper le burst d'échauffement en tête des voix Voxtral")
     ap.add_argument("--advance", action="store_true",
                     help="en diaporama, avance à la slide suivante à la fin du voiceover")
     ap.add_argument("--advance-buffer", type=int, default=600,
@@ -740,6 +834,7 @@ def main() -> None:
             "rate": args.rate,
             "speed": speed,
             "keep": args.keep_audio,
+            "trim_warmup": args.trim_warmup,
             "model_id": tts_model,
             "url": tts_url,
             "lang": tts_lang,
