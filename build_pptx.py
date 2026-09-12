@@ -8,7 +8,10 @@ présentateur.
 
 Avec `--audio`, un fichier audio TTS est généré depuis le voiceover de chaque
 slide et intégré au PPT en **lecture automatique** : en diaporama, avancer ou
-reculer déclenche le voiceover de la slide affichée.
+reculer déclenche le voiceover de la slide affichée. Une **barre de
+progression** toujours visible est dessinée en bas de chaque slide et se
+remplit sur la durée de l'audio (elle suit la pause `S` du diaporama) ; les
+contrôles média PowerPoint et l'icône audio restent aussi disponibles.
 
 Moteurs TTS (`--tts`) :
 
@@ -26,6 +29,7 @@ Usage :
                          [--speed 1.0] [--rate 180]
                          [--audio-dir llm-output/audio]
                          [--keep-audio] [--tts-config tts.json] [--serve-tts]
+                         [--no-media-controls] [--no-progress-bar]
 """
 
 from __future__ import annotations
@@ -40,13 +44,16 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
+from lxml import etree
 from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
-from pptx.oxml.ns import qn
+from pptx.oxml import parse_xml
+from pptx.oxml.ns import nsdecls, qn
 from pptx.util import Inches, Pt
 
 SLIDE_W = Inches(13.333)
@@ -64,6 +71,14 @@ SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8000
 SERVER_COMMAND = ["mlx_audio.server", "--host", "{host}", "--port", "{port}"]
 SERVER_STARTUP_TIMEOUT = 180
+
+P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+MEDIA_CTRLS_EXT_URI = "{2FDB2607-1784-4EEB-B798-7EB5836EED8A}"
+AUDIO_ICON_IN = 0.5
+PROGRESS_BAR_H = Inches(0.12)
+PROGRESS_TRACK = RGBColor(0xDD, 0xDD, 0xDD)
+etree.register_namespace("p14", P14_NS)
 
 
 def load_storyboard(path: Path) -> dict:
@@ -273,11 +288,19 @@ def set_autoplay(shape) -> None:
         return
 
 
-def embed_audio(slide, mp3: Path) -> None:
+def embed_audio(slide, mp3: Path):
+    """Insère l'audio en bas à droite, visible pour accéder aux contrôles."""
+    size = Inches(AUDIO_ICON_IN)
     shape = slide.shapes.add_movie(
-        str(mp3), Inches(-2), Inches(0), Inches(1), Inches(1), mime_type="audio/mpeg"
+        str(mp3),
+        SLIDE_W - size - Inches(0.15),
+        SLIDE_H - size - Inches(0.15) - PROGRESS_BAR_H,
+        size,
+        size,
+        mime_type="audio/mpeg",
     )
     set_autoplay(shape)
+    return shape
 
 
 def audio_duration_ms(path: Path) -> int | None:
@@ -312,6 +335,167 @@ def set_advance_after(slide, ms: int) -> None:
         timing.addprevious(transition)
     else:
         sld.append(transition)
+
+
+def add_progress_bar(slide):
+    """Barre de progression en bas de slide ; renvoie le calque qui se remplit.
+
+    Un fond gris (piste) + un calque accent qui sera révélé de gauche à droite
+    par une animation « wipe » d'une durée égale à l'audio.
+    """
+    top = SLIDE_H - PROGRESS_BAR_H
+    track = slide.shapes.add_shape(1, 0, top, SLIDE_W, PROGRESS_BAR_H)
+    track.fill.solid()
+    track.fill.fore_color.rgb = PROGRESS_TRACK
+    track.line.fill.background()
+    track.shadow.inherit = False
+    fill = slide.shapes.add_shape(1, 0, top, SLIDE_W, PROGRESS_BAR_H)
+    fill.fill.solid()
+    fill.fill.fore_color.rgb = ACCENT
+    fill.line.fill.background()
+    fill.shadow.inherit = False
+    return fill
+
+
+def _media_progress_timing_xml(
+    media_id: int, fill_id: int, duration_ms: int
+) -> str:
+    """Timing combiné : audio en autoplay + wipe du calque de progression.
+
+    Le média et l'animation démarrent ensemble à l'entrée de la slide ; S met
+    le diaporama en pause (audio et animation) puis reprend au même point.
+    """
+    return f'''<p:timing {nsdecls("p")}>
+  <p:tnLst>
+    <p:par>
+      <p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot">
+        <p:childTnLst>
+          <p:seq concurrent="1" nextAc="none">
+            <p:cTn id="2" dur="indefinite" nodeType="mainSeq">
+              <p:childTnLst>
+                <p:par>
+                  <p:cTn id="3" fill="hold">
+                    <p:stCondLst>
+                      <p:cond delay="indefinite"/>
+                      <p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>
+                    </p:stCondLst>
+                    <p:childTnLst>
+                      <p:video>
+                        <p:cMediaNode vol="80000">
+                          <p:cTn id="4" fill="hold" display="0">
+                            <p:stCondLst><p:cond delay="0"/></p:stCondLst>
+                          </p:cTn>
+                          <p:tgtEl><p:spTgt spid="{media_id}"/></p:tgtEl>
+                        </p:cMediaNode>
+                      </p:video>
+                      <p:par>
+                        <p:cTn id="5" presetID="22" presetClass="entr" presetSubtype="1" fill="hold" grpId="0" nodeType="withEffect">
+                          <p:stCondLst><p:cond delay="0"/></p:stCondLst>
+                          <p:childTnLst>
+                            <p:set>
+                              <p:cBhvr>
+                                <p:cTn id="6" dur="1" fill="hold">
+                                  <p:stCondLst><p:cond delay="0"/></p:stCondLst>
+                                </p:cTn>
+                                <p:tgtEl><p:spTgt spid="{fill_id}"/></p:tgtEl>
+                                <p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst>
+                              </p:cBhvr>
+                              <p:to><p:strVal val="visible"/></p:to>
+                            </p:set>
+                            <p:animEffect transition="in" filter="wipe(left)">
+                              <p:cBhvr>
+                                <p:cTn id="7" dur="{int(duration_ms)}" fill="hold"/>
+                                <p:tgtEl><p:spTgt spid="{fill_id}"/></p:tgtEl>
+                              </p:cBhvr>
+                            </p:animEffect>
+                          </p:childTnLst>
+                        </p:cTn>
+                      </p:par>
+                    </p:childTnLst>
+                  </p:cTn>
+                </p:par>
+              </p:childTnLst>
+            </p:cTn>
+            <p:prevCondLst>
+              <p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond>
+            </p:prevCondLst>
+            <p:nextCondLst>
+              <p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond>
+            </p:nextCondLst>
+          </p:seq>
+        </p:childTnLst>
+      </p:cTn>
+    </p:par>
+  </p:tnLst>
+</p:timing>'''
+
+
+def set_media_progress_timing(
+    slide, media_id: int, fill_id: int, duration_ms: int
+) -> None:
+    """Remplace le timing de la slide par audio autoplay + barre animée."""
+    sld = slide._element
+    for old in sld.findall(qn("p:timing")):
+        sld.remove(old)
+    timing = parse_xml(_media_progress_timing_xml(media_id, fill_id, duration_ms))
+    transition = sld.find(qn("p:transition"))
+    if transition is not None:
+        transition.addnext(timing)
+    else:
+        ext = sld.find(qn("p:extLst"))
+        if ext is not None:
+            ext.addprevious(timing)
+        else:
+            sld.append(timing)
+
+
+def _inject_show_media_controls(xml: bytes) -> bytes:
+    """Ajoute <p14:showMediaCtrls val="1"/> dans p:presentationPr.
+
+    L'option « Show Media Controls » de PowerPoint affiche la barre play/pause
+    et la progression en bas de l'écran pendant le diaporama. Elle vit dans
+    `ppt/presProps.xml` (p:presentationPr/p:showPr/p:extLst).
+    """
+    root = etree.fromstring(xml)
+    show_pr = root.find(f"{{{P_NS}}}showPr")
+    if show_pr is None:
+        show_pr = etree.Element(f"{{{P_NS}}}showPr")
+        show_pr.set("useTimings", "1")
+        anchor = root.find(f"{{{P_NS}}}clrMru")
+        if anchor is None:
+            anchor = root.find(f"{{{P_NS}}}extLst")
+        if anchor is not None:
+            anchor.addprevious(show_pr)
+        else:
+            root.append(show_pr)
+    show_ext = show_pr.find(f"{{{P_NS}}}extLst")
+    if show_ext is None:
+        show_ext = etree.SubElement(show_pr, f"{{{P_NS}}}extLst")
+    for ext in show_ext.findall(f"{{{P_NS}}}ext"):
+        if ext.get("uri") == MEDIA_CTRLS_EXT_URI:
+            return etree.tostring(
+                root, xml_declaration=True, encoding="UTF-8", standalone=True
+            )
+    ext = etree.SubElement(show_ext, f"{{{P_NS}}}ext")
+    ext.set("uri", MEDIA_CTRLS_EXT_URI)
+    etree.SubElement(ext, f"{{{P14_NS}}}showMediaCtrls").set("val", "1")
+    return etree.tostring(
+        root, xml_declaration=True, encoding="UTF-8", standalone=True
+    )
+
+
+def set_show_media_controls(pptx_path: Path) -> None:
+    """Active les contrôles média de PowerPoint pour tout le diaporama."""
+    tmp = pptx_path.with_name(pptx_path.stem + ".media" + pptx_path.suffix)
+    with zipfile.ZipFile(pptx_path) as src, zipfile.ZipFile(
+        tmp, "w", zipfile.ZIP_DEFLATED
+    ) as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "ppt/presProps.xml":
+                data = _inject_show_media_controls(data)
+            dst.writestr(item, data)
+    tmp.replace(pptx_path)
 
 
 # ---------------------------------------------------------------------------
@@ -446,13 +630,22 @@ def build(data: dict, out_path: Path, root: Path, audio_cfg: dict | None = None)
                 if synthesize(voiceover, mp3, audio_cfg):
                     apply_speed(mp3, audio_cfg["speed"])
             if mp3.is_file():
-                embed_audio(slide, mp3)
+                media_shape = embed_audio(slide, mp3)
+                need_ms = audio_cfg.get("advance") or audio_cfg.get("progress")
+                ms = audio_duration_ms(mp3) if need_ms else None
                 if audio_cfg.get("advance"):
-                    ms = audio_duration_ms(mp3)
                     if ms:
                         set_advance_after(slide, ms + audio_cfg.get("advance_buffer", 600))
                     else:
                         print("  durée audio illisible (ffprobe manquant ?) : avance auto ignorée.")
+                if audio_cfg.get("progress"):
+                    if ms:
+                        fill_shape = add_progress_bar(slide)
+                        set_media_progress_timing(
+                            slide, media_shape.shape_id, fill_shape.shape_id, ms
+                        )
+                    else:
+                        print("  durée audio illisible : barre de progression ignorée.")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out_path))
@@ -495,6 +688,12 @@ def main() -> None:
                     help="en diaporama, avance à la slide suivante à la fin du voiceover")
     ap.add_argument("--advance-buffer", type=int, default=600,
                     help="délai après l'audio avant d'avancer (ms, défaut 600)")
+    ap.add_argument("--no-media-controls", action="store_true",
+                    help="ne pas afficher la barre de contrôle média (play/pause, "
+                         "progression) en bas de l'écran en diaporama")
+    ap.add_argument("--no-progress-bar", action="store_true",
+                    help="ne pas afficher de barre de progression audio en bas "
+                         "des slides")
     args = ap.parse_args()
 
     root = Path.cwd()
@@ -546,6 +745,7 @@ def main() -> None:
             "lang": tts_lang,
             "advance": args.advance,
             "advance_buffer": args.advance_buffer,
+            "progress": not args.no_progress_bar,
         }
 
     server_proc = None
@@ -569,11 +769,22 @@ def main() -> None:
             stop_local_server(server_proc)
             print("  serveur TTS arrêté.")
 
+    if audio_cfg and not args.no_media_controls:
+        set_show_media_controls(outfile)
+
     print(f"{n} slides -> {outfile}")
     if audio_cfg:
         extra = ", avance auto en fin de voix" if audio_cfg.get("advance") else ""
+        controls = (
+            "" if args.no_media_controls
+            else ", contrôles média (play/pause) en diaporama"
+        )
+        progress = (
+            "" if args.no_progress_bar else ", barre de progression audio"
+        )
         print(f"voiceover -> {audio_cfg['dir']} "
-              f"({audio_cfg['tts']}, voix {audio_cfg['voice']}, lecture automatique{extra})")
+              f"({audio_cfg['tts']}, voix {audio_cfg['voice']}, "
+              f"lecture automatique{extra}{controls}{progress})")
 
 
 if __name__ == "__main__":

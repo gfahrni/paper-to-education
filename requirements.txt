@@ -1,6 +1,7 @@
 pymupdf
 pillow
 python-pptx
+lxml
 
 # Optionnel : meilleure détection des tables
 # pdfplumber

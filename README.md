@@ -32,6 +32,9 @@ llm-output/presentation.pptx   slides + images + voiceover
   voiceover en notes du présentateur.
 - **Voiceover intégré** : audio TTS par slide, en lecture automatique, avec
   moteur local (`mlx-audio`, voix humaines FR) ou `say` macOS (hors-ligne).
+  Une **barre de progression** reste visible en bas de chaque slide et se met
+  en pause avec `S` (pause du diaporama) ; les contrôles média PowerPoint et
+  l'icône audio restent aussi accessibles au survol/clic.
 - **Modèles gratuits par défaut** avec repli automatique, ou provider payant via
   `config.json` / `opencode auth login`.
 
@@ -124,6 +127,7 @@ make serve-tts  # démarre le serveur TTS local en manuel (127.0.0.1:8000)
 make pptx VOICE=fr_male   # surcharge la voix
 make pptx SPEED=1.1       # vitesse de lecture
 make pptx TTS=say         # repli sur la voix macOS (hors-ligne, robotique)
+make pptx ADVANCE=0       # pas d'avance auto (clic pour changer de slide)
 ```
 
 ### Pipeline manuel
@@ -229,6 +233,21 @@ et intégré au `.pptx` en **lecture automatique** : en diaporama, avancer ou
 reculer déclenche le voiceover de la slide affichée (et donc le rejoue si tu
 reviens en arrière).
 
+Une **barre de progression** est dessinée en bas de chaque slide : elle se
+remplit de gauche à droite sur la durée exacte de l'audio, toujours visible
+(pas seulement au survol), et suit le rythme du voiceover. En diaporama, la
+touche `S` met le diaporama en pause (audio + barre + minuteur d'avance), et
+une seconde pression reprend exactement où on s'était arrêté.
+
+En complément, PowerPoint affiche sa **barre de contrôle média** (play/pause +
+progression) au survol/clic : l'option « Show media controls » est activée dans
+le fichier et l'icône audio est laissée visible. `--no-progress-bar` /
+`--no-media-controls` désactivent l'un ou l'autre.
+
+Par défaut (`make pptx`), la slide avance automatiquement à la fin du
+voiceover (`--advance`). Pour plutôt rester sur la slide et avancer au clic,
+utilise `make pptx ADVANCE=0`.
+
 Moteurs disponibles via `--tts` :
 
 | `--tts` | Qualité | Dépendances | Voix |
@@ -313,6 +332,8 @@ Pour le lancer/le garder en manuel : `make serve-tts`.
 | `--keep-audio` | — | Réutilise les mp3 existants (pas de régénération) |
 | `--advance` | — | En diaporama, avance à la fin du voiceover de la slide |
 | `--advance-buffer` | `600` | Délai après l'audio avant d'avancer (ms) |
+| `--no-media-controls` | — | Ne pas afficher la barre de contrôle média (play/pause, progression) |
+| `--no-progress-bar` | — | Ne pas afficher la barre de progression audio en bas des slides |
 
 La vitesse (`--speed`) est appliquée par ffmpeg (`atempo`) sans modifier la
 hauteur de la voix (défaut `1.0`).
@@ -320,7 +341,8 @@ hauteur de la voix (défaut `1.0`).
 Avec `--advance`, la durée de chaque mp3 (mesurée par `ffprobe`) est inscrite
 dans la transition de la slide (« avancer après N ms ») : en diaporama, le
 voiceover se lance puis la slide suivante s'affiche automatiquement à la fin
-(+ `--advance-buffer` ms de marge). `make pptx` active déjà `--advance`.
+(+ `--advance-buffer` ms de marge). `make pptx` l'active par défaut ;
+`make pptx ADVANCE=0` le désactive (la slide ne change alors qu'au clic).
 
 Limite : le découpage reste **par slide** ; sauter à un paragraphe précis du
 voiceover n'est pas géré nativement par PowerPoint. Changer de voix ou de

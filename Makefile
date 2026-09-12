@@ -11,6 +11,7 @@ else
 VOICE ?= fr_female
 endif
 SPEED ?= 1.0
+ADVANCE ?= 1
 
 TTS_URL    ?= http://127.0.0.1:8000/v1/audio/speech
 TTS_LANG   ?= fr
@@ -22,11 +23,12 @@ help:
 	@echo "make install     : crée .venv et installe les dépendances Python"
 	@echo "make extract     : PDF -> $(PAPER)/ (extract.py)"
 	@echo "make storyboard  : $(PAPER)/ -> $(OUT)/ storyboard + voiceover (LLM)"
-	@echo "make pptx        : $(OUT)/ -> presentation.pptx + voiceover ($(TTS), voix $(VOICE), $(SPEED)x, avance auto)"
+	@echo "make pptx        : $(OUT)/ -> presentation.pptx + voiceover ($(TTS), voix $(VOICE), $(SPEED)x, barre de progression)"
 	@echo "make serve-tts   : démarre le serveur TTS local (mlx_audio.server sur :8000)"
 	@echo ""
 	@echo "Variables : PAPER=$(PAPER) OUT=$(OUT) TTS=$(TTS) VOICE=$(VOICE) SPEED=$(SPEED)"
-	@echo "            TTS_URL=$(TTS_URL) TTS_LANG=$(TTS_LANG) TTS_CONFIG=$(TTS_CONFIG)"
+	@echo "            TTS_URL=$(TTS_URL) TTS_LANG=$(TTS_LANG) TTS_CONFIG=$(TTS_CONFIG) ADVANCE=$(ADVANCE)"
+	@echo "            ADVANCE=0 : pas d'avance auto (clic pour changer de slide)"
 
 install:
 	python3 -m venv .venv
@@ -43,7 +45,8 @@ storyboard:
 pptx:
 	python build_pptx.py --in $(OUT) --audio --tts $(TTS) \
 		--tts-config $(TTS_CONFIG) --tts-url $(TTS_URL) --tts-lang $(TTS_LANG) \
-		--voice $(VOICE) --speed $(SPEED) --advance --serve-tts
+		--voice $(VOICE) --speed $(SPEED) \
+		$(if $(filter 1,$(ADVANCE)),--advance,) --serve-tts
 
 serve-tts:
 	mlx_audio.server --host 127.0.0.1 --port 8000
