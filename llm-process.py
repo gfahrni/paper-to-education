@@ -213,6 +213,18 @@ def main() -> None:
     prompt_file = (
         (root / args.prompt).resolve() if not args.prompt.is_absolute() else args.prompt
     )
+    # Dossier de session opencode : doit contenir paper ET out pour que les
+    # chemins relatifs du prompt (paper-processed/, llm-output/) se résolvent.
+    # Via pdf-to-education.command, cwd == WORK (= parent commun). En manuel
+    # avec des chemins absolus disparates, on prend le plus proche ancêtre
+    # commun au lieu de cwd.
+    try:
+        session_dir = Path(os.path.commonpath([str(paper), str(out)]))
+    except ValueError:
+        session_dir = Path.cwd()
+    # Si paper/out sont relatifs (cas Makefile), on garde cwd.
+    if not args.paper.is_absolute() and not args.out.is_absolute():
+        session_dir = root
 
     if not paper.is_dir():
         sys.exit(f"Dossier d'extraction introuvable : {paper}\nLance d'abord extract.py.")
@@ -222,6 +234,20 @@ def main() -> None:
 
     opencode = find_opencode()
     prompt = prompt_file.read_text(encoding="utf-8")
+    # Ancre les chemins réels : le prompt versionné parle en relatifs
+    # (paper-processed/, llm-output/) valables quand session_dir == WORK.
+    # Si l'utilisateur passe des chemins absolus ailleurs, on lève
+    # l'ambiguïté en tête de prompt plutôt que de laisser l'agent chercher.
+    paper_rel = paper.relative_to(session_dir) if paper.is_relative_to(session_dir) else paper
+    out_rel = out.relative_to(session_dir) if out.is_relative_to(session_dir) else out
+    prompt = (
+        f"<!-- contexte d'exécution : dossier opencode --dir = {session_dir}, "
+        f"extraction = {paper} (référencé '{paper_rel}'), "
+        f"sortie = {out} (référencé '{out_rel}'). "
+        f"Lis l'extraction à {paper}/text/full_text.md et "
+        f"{paper}/metadata/extraction.json, écris les livrables à "
+        f"{out}/storyboard.json et {out}/voiceover.md. -->\n\n" + prompt
+    )
     config_file = (
         (root / args.config).resolve() if not args.config.is_absolute() else args.config
     )
@@ -232,13 +258,14 @@ def main() -> None:
 
     print(f"paper    : {paper}")
     print(f"output   : {out}")
+    print(f"session  : {session_dir} (--dir opencode)")
     print(f"config   : {config_file if config else '(aucune)'}")
     print(f"modèles  : {', '.join(models)}")
     if env_extra:
         print(f"clés API : {', '.join(env_extra)} (depuis la config)")
 
     if args.dry_run:
-        cmd = build_command(opencode, models[0], prompt, root)
+        cmd = build_command(opencode, models[0], prompt, session_dir)
         print("\n[dry-run] commande :")
         print(" ".join(cmd[:8]), "<prompt>")
         print("\nPrompt :")
@@ -247,7 +274,7 @@ def main() -> None:
 
     for i, model in enumerate(models, start=1):
         print(f"\n=== Tentative {i}/{len(models)} avec {model} ===")
-        cmd = build_command(opencode, model, prompt, root)
+        cmd = build_command(opencode, model, prompt, session_dir)
         code = run_session(cmd, log_path, args.timeout, env_extra)
         if code != 0:
             print(f"  session terminée avec le code {code}, modèle suivant.")
