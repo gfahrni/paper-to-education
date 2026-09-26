@@ -106,7 +106,8 @@ sur les suivants si le premier est indisponible.
 
 ```bash
 uv tool install --force 'mlx-audio[server,tts]' \
-    --with misaki --with phonemizer-fork --with espeakng-loader
+    --with misaki --with phonemizer-fork --with espeakng-loader \
+    --with 'mistral-common>=1.12'
 
 cp tts.example.json tts.json   # ajuste ensuite voix / modèle si besoin
 ```
@@ -296,7 +297,8 @@ Installation (une fois) :
 ```bash
 brew install ffmpeg
 uv tool install --force 'mlx-audio[server,tts]' \
-    --with misaki --with phonemizer-fork --with espeakng-loader
+    --with misaki --with phonemizer-fork --with espeakng-loader \
+    --with 'mistral-common>=1.12'
 ```
 
 > `uv tool` expose les commandes dans `~/.local/bin` sans polluer ton Python.
