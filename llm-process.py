@@ -81,14 +81,14 @@ def find_opencode() -> str:
     return exe
 
 
-def build_command(opencode: str, model: str, prompt: str, root: Path) -> list[str]:
+def build_command(opencode: str, model: str, prompt: str) -> list[str]:
+    # opencode >= 2.x : `run` n'a plus de flag --dir ; le dossier de travail
+    # est imposé via cwd dans run_session().
     return [
         opencode,
         "run",
         "--model",
         model,
-        "--dir",
-        str(root),
         "--auto",
         "--title",
         "pdf-to-education : storyboard + voiceover",
@@ -97,7 +97,8 @@ def build_command(opencode: str, model: str, prompt: str, root: Path) -> list[st
 
 
 def run_session(cmd: list[str], log_path: Path, timeout: int,
-                extra_env: dict[str, str] | None = None) -> int:
+                extra_env: dict[str, str] | None = None,
+                cwd: Path | None = None) -> int:
     """Exécute la session en streamant la sortie vers la console et un log."""
     print("→", " ".join(cmd[:8]), "...")
     env = {**os.environ, **(extra_env or {})}
@@ -110,6 +111,7 @@ def run_session(cmd: list[str], log_path: Path, timeout: int,
                 text=True,
                 bufsize=1,
                 env=env,
+                cwd=str(cwd) if cwd else None,
             )
         except OSError as exc:
             print(f"  échec du lancement : {exc}")
@@ -265,7 +267,7 @@ def main() -> None:
         print(f"clés API : {', '.join(env_extra)} (depuis la config)")
 
     if args.dry_run:
-        cmd = build_command(opencode, models[0], prompt, session_dir)
+        cmd = build_command(opencode, models[0], prompt)
         print("\n[dry-run] commande :")
         print(" ".join(cmd[:8]), "<prompt>")
         print("\nPrompt :")
@@ -274,8 +276,8 @@ def main() -> None:
 
     for i, model in enumerate(models, start=1):
         print(f"\n=== Tentative {i}/{len(models)} avec {model} ===")
-        cmd = build_command(opencode, model, prompt, session_dir)
-        code = run_session(cmd, log_path, args.timeout, env_extra)
+        cmd = build_command(opencode, model, prompt)
+        code = run_session(cmd, log_path, args.timeout, env_extra, session_dir)
         if code != 0:
             print(f"  session terminée avec le code {code}, modèle suivant.")
             continue
