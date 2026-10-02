@@ -2,8 +2,8 @@
 """llm-process.py — Étape 2 : interprétation LLM de l'extraction PDF.
 
 Prend le dossier `paper-processed/` produit par `extract.py` et demande à une
-session opencode non-interactive (modèle gratuit `opencode/big-pickle`, avec
-repli sur d'autres modèles gratuits) de produire :
+session opencode non-interactive (modèle `opencode-go/deepseek-v4.1-flash`, avec
+repli sur d'autres modèles) de produire :
 
     llm-output/storyboard.json   plan du PowerPoint (slides, images, voix off)
     llm-output/voiceover.md      texte de commentaire par slide
@@ -17,7 +17,7 @@ Prérequis : le binaire `opencode` doit être dans le PATH, et
 Usage :
     python llm-process.py [--paper paper-processed] [--out llm-output]
                           [--prompt prompts/llm-process.md] [--config config.json]
-                          [--model opencode/big-pickle] [--model ...]
+                          [--model opencode-go/deepseek-v4.1-flash] [--model ...]
                           [--timeout 1800] [--build] [--dry-run]
 
     --config    config locale (modèles + clés API), ignorée par Git
@@ -49,10 +49,9 @@ import threading
 from pathlib import Path
 
 DEFAULT_MODELS = [
+    "opencode-go/deepseek-v4.1-flash",
+    "deepseek/deepseek-flash",
     "opencode/big-pickle",
-    "opencode/mimo-v2.5-free",
-    "opencode/nemotron-3-ultra-free",
-    "opencode/ling-3.0-flash-fin-free",
 ]
 
 SCRIPT_DIR = Path(__file__).resolve().parent

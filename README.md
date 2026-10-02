@@ -94,11 +94,12 @@ Connecte un provider une fois (`opencode auth login`, ou `/connect` dans le TUI
 opencode), puis vérifie :
 
 ```bash
-opencode models | grep big-pickle
+opencode models | grep deepseek-v4.1-flash
 ```
 
-Le script utilise par défaut des modèles **gratuits** et bascule automatiquement
-sur les suivants si le premier est indisponible.
+Le script utilise par défaut `opencode-go/deepseek-v4.1-flash` et bascule
+automatiquement sur les modèles suivants de la liste si le premier est
+indisponible.
 
 ### 4. Serveur TTS local (voiceover, optionnel)
 
@@ -168,7 +169,7 @@ Sans argument, `extract.py` prend l'unique PDF de `input-pdf/`.
 | `--out` | `llm-output` | Dossier de sortie |
 | `--prompt` | `prompts/llm-process.md` | Prompt envoyé à la session |
 | `--config` | `config.json` | Config locale (modèles, clés API) |
-| `--model` | `opencode/big-pickle` | Modèle (répétable, dans l'ordre) |
+| `--model` | `opencode-go/deepseek-v4.1-flash` | Modèle (répétable, dans l'ordre) |
 | `--timeout` | `1800` | Délai max par session (s) |
 | `--build` | — | Génère aussi `presentation.pptx` |
 | `--audio` | — | Avec `--build` : voiceover TTS (lecture auto) |
@@ -195,8 +196,8 @@ python llm-process.py --dry-run
 
 ### Choisir le modèle / connecter une API
 
-Par défaut, le script utilise les modèles **gratuits** d'OpenCode Zen, sans
-configuration. Pour utiliser un autre provider (payant), il y a deux méthodes —
+Par défaut, le script utilise `opencode-go/deepseek-v4.1-flash` (provider
+OpenCode Go). Pour utiliser un autre provider, il y a deux méthodes —
 **ne mets jamais une clé API dans le script**.
 
 **a) Via `opencode auth login`** (le plus simple) : la clé est stockée par
@@ -214,7 +215,7 @@ cp config.example.json config.json
 
 ```json
 {
-  "models": ["anthropic/claude-sonnet-4-5", "opencode/big-pickle"],
+  "models": ["opencode-go/deepseek-v4.1-flash", "opencode/big-pickle"],
   "env": {
     "ANTHROPIC_API_KEY": "sk-ant-..."
   }
@@ -222,7 +223,7 @@ cp config.example.json config.json
 ```
 
 - `models` : liste essayée dans l'ordre, le premier qui répond gagne. Le dernier
-  peut rester un modèle gratuit comme filet de sécurité.
+  peut rester un modèle gratuit comme filet de sécurité (ex. `opencode/big-pickle`).
 - `env` : variables d'environnement passées à la session opencode (noms des
   clés selon le provider : `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`…).

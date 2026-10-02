@@ -1,7 +1,7 @@
 {
   "models": [
-    "opencode/big-pickle",
-    "opencode/mimo-v2.5-free"
+    "opencode-go/deepseek-v4.1-flash",
+    "opencode/big-pickle"
   ],
   "env": {
     "ANTHROPIC_API_KEY": "sk-ant-...",
