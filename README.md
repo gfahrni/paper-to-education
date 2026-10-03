@@ -1,20 +1,32 @@
 # pdf-to-education
 
-Transformer un PDF d'article scientifique en **présentation pédagogique
-PowerPoint avec voix off**.
+Transformer un article — ou un dossier d'articles — en **présentation
+pédagogique PowerPoint avec voix off**.
 
-Le projet prend un PDF en entrée et produit un `.pptx` prêt à présenter :
-texte résumé par un LLM, figures et tables conservées en image, et un voiceover
-TTS en lecture automatique par slide. La chaîne va de bout en bout :
+Deux registres et deux profondeurs, combinables librement :
+
+| | `--mode journal` (défaut) | `--mode course` |
+| --- | --- | --- |
+| Source | un PDF | un PDF ou un **dossier de PDF** |
+| Public | professionnels / étudiants avancés | formation (ex. radiologues) |
+| Rendu | journal club : contexte, méthodes, résultats, lecture critique | cours : objectifs, chapitres thématiques, synthèse multi-sources |
+
+- `--depth summary` (défaut) : de 8 à 20 slides, l'essentiel seulement.
+- `--depth extensive` : **rien d'important n'est omis**. Un plan détaillé est
+  d'abord généré (`plan.md`), puis les slides, **sans plafond de longueur**.
+
+Le projet produit un `.pptx` prêt à présenter : texte résumé par un LLM, figures
+et tables conservées en image, et un voiceover TTS en lecture automatique par
+slide. La chaîne va de bout en bout :
 
 ```text
-input-pdf/article.pdf
+input-pdf/article.pdf   (ou un dossier de PDF)
         │  extract.py
         ▼
 paper-processed/        texte, figures, tables, légendes (brut et traçable)
-        │  llm-process.py (session opencode)
+        │  llm-process.py (session opencode, --mode/--depth)
         ▼
-llm-output/             storyboard.json + voiceover.md
+llm-output/             plan.md (extensif) + storyboard.json + voiceover.md
         │  build_pptx.py (+ TTS)
         ▼
 llm-output/presentation.pptx   slides + images + voiceover
@@ -25,19 +37,25 @@ llm-output/presentation.pptx   slides + images + voiceover
 - **Extraction fidèle** : texte reconstruit dans l'ordre de lecture (colonnes,
   césures, lettrines), figures extraites en image, tables rendues en image +
   texte brut, légendes appariées, index JSON de traçabilité.
+- **Multi-sources** : `extract.py` accepte un **dossier de PDF** et produit une
+  arborescence par source plus un index agrégé, pour construire un cours.
 - **Storyboard généré par LLM** : une session opencode non-interactive lit
   l'extraction et écrit un plan de slides (titres, puces, image associée) et un
   commentaire oral par slide.
-- **Lecture critique** : la dernière slide porte un regard extérieur sur
-  l'article (claims *vs* données, biais non admis, angles morts, conflits
-  d'intérêts) sans répéter les limites déjà déclarées par les auteurs.
-- **PowerPoint 16:9** : mise en page automatique (titre, puces, image, légende),
-  voiceover en notes du présentateur.
+- **Mode journal club ou cours**, en profondeur **résumée ou extensive** (plan
+  détaillé préalable, nombre de slides non plafonné).
+- **Lecture critique** (journal club) : la dernière slide porte un regard
+  extérieur sur l'article (claims *vs* données, biais non admis, angles morts,
+  conflits d'intérêts) sans répéter les limites déjà déclarées.
+- **PowerPoint 16:9** : mise en page automatique (titre, puces, image, légende,
+  séparateurs de chapitre), voiceover en notes du présentateur.
 - **Voiceover intégré** : audio TTS par slide, en lecture automatique, avec
   moteur local (`mlx-audio`, voix humaines FR) ou `say` macOS (hors-ligne).
   Une **barre de progression** reste visible en bas de chaque slide et se met
   en pause avec `S` (pause du diaporama) ; les contrôles média PowerPoint et
   l'icône audio restent aussi accessibles au survol/clic.
+- **Application macOS** : double-clic, choix natifs de la source, du mode et de
+  la profondeur.
 - **Modèles gratuits par défaut** avec repli automatique, ou provider payant via
   `config.json` / `opencode auth login`.
 
@@ -45,11 +63,12 @@ llm-output/presentation.pptx   slides + images + voiceover
 
 | Script | Rôle | Sortie |
 | --- | --- | --- |
-| `extract.py` | fragmente le PDF sans l'interpréter | `paper-processed/` |
-| `llm-process.py` | pilote la session LLM (opencode) | `llm-output/storyboard.json`, `voiceover.md` |
+| `extract.py` | fragmente un PDF ou un dossier de PDF sans l'interpréter | `paper-processed/` |
+| `llm-process.py` | pilote la session LLM (`--mode`, `--depth`) | `llm-output/plan.md` (extensif), `storyboard.json`, `voiceover.md` |
 | `build_pptx.py` | construit le PPT (+ TTS) | `llm-output/presentation.pptx`, `audio/` |
 
-Le prompt qui pilote le LLM est versionné dans `prompts/llm-process.md`.
+Le prompt est assemblé depuis `prompts/llm-process.md` (base) et les fragments de
+`prompts/fragments/` (`journal`, `course`, `summary`, `extensive`, `plan`).
 
 ## Prérequis
 
@@ -124,10 +143,15 @@ Voxtral `fr_female`, serveur TTS démarré/arrêté automatiquement) :
 ```bash
 make            # affiche l'aide
 make install    # crée .venv + installe les dépendances Python
-make extract    # PDF -> paper-processed/
+make extract    # PDF ou dossier -> paper-processed/
 make storyboard # paper-processed/ -> llm-output/ (storyboard + voiceover)
+make course     # idem, en mode cours (MODE=course)
 make pptx       # llm-output/ -> presentation.pptx + voiceover local
 make serve-tts  # démarre le serveur TTS local en manuel (127.0.0.1:8000)
+
+make storyboard MODE=course             # cours (dossier de PDF)
+make storyboard MODE=course DEPTH=extensive   # cours exhaustif
+make storyboard DEPTH=extensive         # journal club exhaustif
 
 make pptx VOICE=fr_male   # surcharge la voix
 make pptx SPEED=1.1       # vitesse de lecture
@@ -135,29 +159,47 @@ make pptx TTS=say         # repli sur la voix macOS (hors-ligne, robotique)
 make pptx ADVANCE=0       # pas d'avance auto (clic pour changer de slide)
 ```
 
+### Application macOS (double-clic)
+
+`pdf-to-education.command` ouvre des **dialogues natifs** puis fait tout le
+pipeline et pose le `.pptx` à côté de la source. Au lancement, il demande :
+
+1. **la source** : un *fichier PDF* (journal club) ou un *dossier de PDF* (cours) ;
+2. **le mode** : *Journal club* ou *Cours* ;
+3. **la profondeur** : *Résumé* ou *Extensif*.
+
+Le dossier de travail `<nom>_presentation/` est supprimé après succès ; seul le
+`.pptx` final est conservé (`<nom>.pptx`, ou `<nom>_cours_extensif.pptx`…).
+Pour l'automatiser, utilise les variables d'environnement `PDF_TO_EDU_SOURCE`,
+`PDF_TO_EDU_MODE` (`journal`/`course`) et `PDF_TO_EDU_DEPTH`
+(`summary`/`extensive`) : les dialogues sont alors ignorés.
+
 ### Pipeline manuel
 
-Dépose le PDF dans `input-pdf/`, puis :
+Dépose le ou les PDF dans `input-pdf/` (ou indique un PDF / un dossier), puis :
 
 ```bash
-# 1. extraction PDF
-python extract.py [article.pdf] [--in input-pdf] [--out paper-processed] [--dpi 300]
+# 1. extraction (un PDF -> structure plate ; un dossier -> multi-sources)
+python extract.py [article.pdf | dossier/] [--in input-pdf] [--out paper-processed] [--dpi 300]
 
 # 2. storyboard + voiceover (session LLM) + PPT (+ audio)
-python llm-process.py --build --audio
+python llm-process.py --build --audio                     # journal club résumé
+python llm-process.py --mode course --build --audio       # cours
+python llm-process.py --depth extensive --build --audio   # exhaustif (plan puis slides)
 
 # ou seulement le PowerPoint depuis un storyboard existant
 python build_pptx.py --in llm-output
 ```
 
-Sans argument, `extract.py` prend l'unique PDF de `input-pdf/`.
+Sans argument, `extract.py` traite les PDF de `input-pdf/` : un seul -> structure
+plate, plusieurs -> structure multi-sources.
 
 #### `extract.py`
 
 | Option | Défaut | Description |
 | --- | --- | --- |
-| `pdf` (positionnel) | unique PDF de `input-pdf/` | PDF source |
-| `--in` | `input-pdf` | Dossier du PDF |
+| `pdf` (positionnel) | PDF de `input-pdf/` | PDF **ou dossier de PDF** source |
+| `--in` | `input-pdf` | Dossier des PDF d'entrée |
 | `--out` | `paper-processed` | Dossier de sortie |
 | `--dpi` | `300` | Résolution des recadrages de page |
 
@@ -167,7 +209,9 @@ Sans argument, `extract.py` prend l'unique PDF de `input-pdf/`.
 | --- | --- | --- |
 | `--paper` | `paper-processed` | Dossier d'extraction |
 | `--out` | `llm-output` | Dossier de sortie |
-| `--prompt` | `prompts/llm-process.md` | Prompt envoyé à la session |
+| `--mode` | `journal` | `journal` (article) ou `course` (formation) |
+| `--depth` | `summary` | `summary` (borné) ou `extensive` (plan détaillé puis slides, sans plafond) |
+| `--prompt` | `prompts/llm-process.md` | Prompt de base (les fragments de mode/profondeur sont ajoutés) |
 | `--config` | `config.json` | Config locale (modèles, clés API) |
 | `--model` | `opencode-go/deepseek-v4.1-flash` | Modèle (répétable, dans l'ordre) |
 | `--timeout` | `1800` | Délai max par session (s) |
@@ -358,26 +402,35 @@ modèle régénère tout l'audio (sauf `--keep-audio`).
 
 ```text
 input-pdf/        PDF source déposé à la main            (gitignoré)
-paper-processed/  extraction brute                       (gitignoré)
-llm-output/       storyboard, voiceover, audio, .pptx    (gitignoré)
+paper-processed/  extraction brute (un PDF ou N sources) (gitignoré)
+llm-output/       plan, storyboard, voiceover, audio, .pptx (gitignoré)
 ```
 
 ```text
-paper-processed/
-├── text/full_text.md          # texte complet, ordre de lecture, <!-- page N -->
-├── figures/<label>.png        # une image par figure (nom = n° réel)
-├── tables/<label>.png         # table rendue en image
-├── tables/<label>.md          # table en texte brut (best effort)
-├── captions/<label>.txt       # légende associée à la figure/table
-└── metadata/extraction.json   # index complet (page, bbox, méthode…)
+paper-processed/                  # un seul PDF (structure plate)
+├── text/full_text.md             # texte complet, ordre de lecture, <!-- page N -->
+├── figures/<label>.png           # une image par figure (nom = n° réel)
+├── tables/<label>.png            # table rendue en image
+├── tables/<label>.md             # table en texte brut (best effort)
+├── captions/<label>.txt          # légende associée à la figure/table
+├── metadata/extraction.json      # index complet (page, bbox, méthode…)
+└── metadata/sources.json         # index des sources (1 entrée ici)
+
+paper-processed/                  # dossier de PDF (multi-sources)
+├── sources/<NN-slug>/…          # une arborescence complète par PDF
+└── metadata/sources.json        # index agrégé des sources
 
 llm-output/
-├── storyboard.json            # plan du PPT : slides, puces, image, voiceover
-├── voiceover.md               # commentaire oral par slide
-├── audio/slide_NN.mp3         # voiceover TTS (si --audio)
-├── llm-session.log            # trace complète de la session
-└── presentation.pptx          # généré par build_pptx.py
+├── plan.md                       # plan détaillé (--depth extensive)
+├── storyboard.json               # plan du PPT : slides, puces, image, voiceover
+├── voiceover.md                  # commentaire oral par slide
+├── audio/slide_NN.mp3            # voiceover TTS (si --audio)
+├── llm-session.log               # trace de la session (plan-session.log pour le plan)
+└── presentation.pptx             # généré par build_pptx.py
 ```
+
+Dans les deux cas, `metadata/sources.json` liste chaque source (texte complet et
+index) : c'est le point d'entrée lu par `llm-process.py`.
 
 ## Notes
 

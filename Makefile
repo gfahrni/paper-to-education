@@ -3,6 +3,8 @@
 
 PAPER ?= paper-processed
 OUT   ?= llm-output
+MODE  ?= journal
+DEPTH ?= summary
 TTS   ?= mlx
 
 ifeq ($(TTS),say)
@@ -17,17 +19,24 @@ TTS_URL    ?= http://127.0.0.1:8000/v1/audio/speech
 TTS_LANG   ?= fr
 TTS_CONFIG ?= tts.json
 
-.PHONY: help install extract storyboard pptx serve-tts
+.PHONY: help install extract storyboard course pptx serve-tts
 
 help:
-	@echo "make install     : crée .venv et installe les dépendances Python"
-	@echo "make extract     : PDF -> $(PAPER)/ (extract.py)"
-	@echo "make storyboard  : $(PAPER)/ -> $(OUT)/ storyboard + voiceover (LLM)"
-	@echo "make pptx        : $(OUT)/ -> presentation.pptx + voiceover ($(TTS), voix $(VOICE), $(SPEED)x, barre de progression)"
-	@echo "make serve-tts   : démarre le serveur TTS local (mlx_audio.server sur :8000)"
+	@echo "Pipeline :"
+	@echo "  make install     : crée .venv et installe les dépendances Python"
+	@echo "  make extract     : PDF/dossier -> $(PAPER)/ (extract.py)"
+	@echo "  make storyboard  : $(PAPER)/ -> $(OUT)/ storyboard + voiceover (LLM)"
+	@echo "  make pptx        : $(OUT)/ -> presentation.pptx + voiceover ($(TTS), voix $(VOICE), $(SPEED)x)"
+	@echo "  make serve-tts   : démarre le serveur TTS local (mlx_audio.server sur :8000)"
 	@echo ""
-	@echo "Variables : PAPER=$(PAPER) OUT=$(OUT) TTS=$(TTS) VOICE=$(VOICE) SPEED=$(SPEED)"
-	@echo "            TTS_URL=$(TTS_URL) TTS_LANG=$(TTS_LANG) TTS_CONFIG=$(TTS_CONFIG) ADVANCE=$(ADVANCE)"
+	@echo "Choix de rendu :"
+	@echo "  MODE=journal|course        registre (défaut : journal)"
+	@echo "  DEPTH=summary|extensive    profondeur (défaut : summary)"
+	@echo "  ex. make storyboard MODE=course DEPTH=extensive"
+	@echo "  ex. make course      : raccourci MODE=course"
+	@echo ""
+	@echo "Variables : PAPER=$(PAPER) OUT=$(OUT) MODE=$(MODE) DEPTH=$(DEPTH) TTS=$(TTS)"
+	@echo "            VOICE=$(VOICE) SPEED=$(SPEED) ADVANCE=$(ADVANCE)"
 	@echo "            ADVANCE=0 : pas d'avance auto (clic pour changer de slide)"
 
 install:
@@ -40,7 +49,12 @@ extract:
 	python extract.py --out $(PAPER)
 
 storyboard:
-	python llm-process.py --paper $(PAPER) --out $(OUT)
+	python llm-process.py --paper $(PAPER) --out $(OUT) \
+		--mode $(MODE) --depth $(DEPTH)
+
+# Raccourci : cours (dossier de PDF). Ex. make course DEPTH=extensive
+course:
+	$(MAKE) storyboard MODE=course
 
 pptx:
 	python build_pptx.py --in $(OUT) --audio --tts $(TTS) \

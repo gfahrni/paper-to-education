@@ -6,6 +6,8 @@ interpréter. L'interprétation (sections, résumé, storyboard...) est laissée
 au LLM en aval.
 
 Sorties (dossier `paper-processed/` par défaut) :
+
+Un seul PDF (structure plate, mode journal club) :
     text/full_text.md              texte dans l'ordre de lecture, avec
                                    marqueurs de page <!-- page N -->
     figures/<label>.png            une image par figure (nom = n° réel)
@@ -14,12 +16,21 @@ Sorties (dossier `paper-processed/` par défaut) :
     tables/<label>.md              table en texte brut (best effort)
     metadata/extraction.json       index complet (page, bbox, méthode...)
 
+Un dossier de plusieurs PDF (structure multi-sources, mode cours) :
+    sources/<NN-slug>/…            une arborescence complète par PDF
+    metadata/sources.json          index agrégé des sources
+
+Dans les deux cas, `metadata/sources.json` liste chaque source avec son texte
+et son index de figures/tables : c'est le point d'entrée pour l'étape LLM.
+
 Dépendances : PyMuPDF, Pillow. Optionnel : pdfplumber (meilleures tables).
 
 Usage :
-    python extract.py [article.pdf] [--in input-pdf] [--out paper-processed] [--dpi 300]
+    python extract.py [article.pdf | dossier/] [--in input-pdf]
+                      [--out paper-processed] [--dpi 300]
 
-Si le PDF n'est pas fourni, l'unique PDF de `input-pdf/` est utilisé.
+Sans argument, les PDF de `input-pdf/` sont utilisés : un seul -> structure
+plate, plusieurs -> structure multi-sources.
 """
 
 from __future__ import annotations
@@ -356,6 +367,66 @@ def unique_name(base: str, used: dict[str, int]) -> str:
     return base if used[base] == 1 else f"{base}_{used[base]}"
 
 
+def safe_slug(text: str) -> str:
+    """Slug lisible et sûr pour un nom de dossier de source."""
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-._")
+    return (slug[:60] or "source").lower()
+
+
+def resolve_sources(explicit: Path | None, indir: Path) -> tuple[list[Path], bool]:
+    """Détermine les PDF à traiter et le mode d'organisation.
+
+    Renvoie `(pdfs, multi)` : `multi=True` -> une arborescence par source sous
+    `sources/`, `multi=False` -> structure plate (un seul PDF).
+    """
+    if explicit is not None:
+        if explicit.is_dir():
+            pdfs = sorted(explicit.glob("*.pdf"))
+            if not pdfs:
+                sys.exit(f"Aucun PDF dans {explicit}/ — dépose des fichiers .pdf.")
+            return pdfs, True
+        if explicit.is_file():
+            return [explicit], False
+        sys.exit(f"Chemin introuvable : {explicit}")
+
+    pdfs = sorted(indir.glob("*.pdf"))
+    if not pdfs:
+        sys.exit(f"Aucun PDF dans {indir}/ — dépose un fichier .pdf ou passe son chemin.")
+    return pdfs, len(pdfs) > 1
+
+
+def source_entry(meta: dict, pdf: Path, sid: str, sdir_rel: str) -> dict:
+    """Entrée d'index pour `metadata/sources.json` (chemins posix relatifs)."""
+    def rel(name: str) -> str:
+        return f"{sdir_rel}/{name}" if sdir_rel else name
+
+    return {
+        "id": sid,
+        "pdf": meta.get("source_pdf") or str(pdf.resolve()),
+        "filename": pdf.name,
+        "title": meta.get("title") or pdf.stem,
+        "page_count": meta.get("page_count"),
+        "dir": sdir_rel,
+        "text": rel("text/full_text.md"),
+        "metadata": rel("metadata/extraction.json"),
+        "figures": len(meta.get("figures", [])),
+        "tables": len(meta.get("tables", [])),
+    }
+
+
+def write_sources_index(out: Path, entries: list[dict]) -> None:
+    (out / "metadata").mkdir(parents=True, exist_ok=True)
+    index = {
+        "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "source_count": len(entries),
+        "sources": entries,
+    }
+    (out / "metadata" / "sources.json").write_text(
+        json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
+
 def run(pdf: Path, out: Path, dpi: int) -> dict:
     for sub in ["text", "figures", "tables", "captions", "metadata"]:
         (out / sub).mkdir(parents=True, exist_ok=True)
@@ -483,35 +554,48 @@ def run(pdf: Path, out: Path, dpi: int) -> dict:
     return metadata
 
 
-def find_pdf(indir: Path) -> Path:
-    pdfs = sorted(indir.glob("*.pdf"))
-    if not pdfs:
-        sys.exit(f"Aucun PDF dans {indir}/ — dépose un fichier .pdf ou passe son chemin.")
-    if len(pdfs) > 1:
-        names = ", ".join(p.name for p in pdfs)
-        sys.exit(f"Plusieurs PDF dans {indir}/ : {names}\nPrécise lequel en argument.")
-    return pdfs[0]
-
-
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Extraction générique PDF -> texte/figures/tables")
-    ap.add_argument("pdf", type=Path, nargs="?", help="PDF source (défaut : unique PDF de --in)")
+    ap = argparse.ArgumentParser(
+        description="Extraction générique PDF -> texte/figures/tables "
+                    "(un PDF, ou un dossier de PDF en multi-sources)"
+    )
+    ap.add_argument("pdf", type=Path, nargs="?",
+                    help="PDF source ou dossier de PDF (défaut : --in)")
     ap.add_argument("--in", dest="indir", type=Path, default=Path("input-pdf"),
                     help="Dossier des PDF d'entrée")
     ap.add_argument("--out", type=Path, default=Path("paper-processed"))
     ap.add_argument("--dpi", type=int, default=300)
     args = ap.parse_args()
 
-    pdf = args.pdf if args.pdf is not None else find_pdf(args.indir)
-    if not pdf.is_file():
-        sys.exit(f"PDF introuvable : {pdf}")
+    sources, multi = resolve_sources(args.pdf, args.indir)
+    args.out.mkdir(parents=True, exist_ok=True)
 
-    meta = run(pdf, args.out, args.dpi)
-    print(f"texte    -> {args.out / 'text' / 'full_text.md'}")
-    print(f"figures  -> {len(meta['figures'])}")
-    print(f"tables   -> {len(meta['tables'])}")
-    print(f"images non labellisées -> {len(meta['unlabeled_images'])}")
-    print(f"index    -> {args.out / 'metadata' / 'extraction.json'}")
+    entries = []
+    for i, pdf in enumerate(sources, start=1):
+        if multi:
+            sid = f"{i:02d}-{safe_slug(pdf.stem)}"
+            sdir = args.out / "sources" / sid
+            sdir_rel = f"sources/{sid}"
+        else:
+            sid = safe_slug(pdf.stem)
+            sdir = args.out
+            sdir_rel = ""
+        meta = run(pdf, sdir, args.dpi)
+        entries.append(source_entry(meta, pdf, sid, sdir_rel))
+
+    write_sources_index(args.out, entries)
+
+    if multi:
+        print(f"sources  -> {len(entries)}")
+        for e in entries:
+            print(f"  - {e['filename']} : {e['figures']} figures, "
+                  f"{e['tables']} tables, {e['page_count']} p. -> {e['dir']}/")
+    else:
+        meta = entries[0]
+        print(f"texte    -> {args.out / 'text' / 'full_text.md'}")
+        print(f"figures  -> {meta['figures']}")
+        print(f"tables   -> {meta['tables']}")
+    print(f"index    -> {args.out / 'metadata' / 'sources.json'}")
 
 
 if __name__ == "__main__":

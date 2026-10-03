@@ -600,6 +600,25 @@ def build(data: dict, out_path: Path, root: Path, audio_cfg: dict | None = None)
                 r.text = line
                 r.font.size = Pt(18)
                 r.font.color.rgb = GREY
+        elif layout == "section":
+            box = slide.shapes.add_textbox(
+                Inches(0.8), Inches(3.0), SLIDE_W - Inches(1.6), Inches(1.4)
+            )
+            tf = box.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.alignment = PP_ALIGN.CENTER
+            run = p.add_run()
+            run.text = s.get("title", "")
+            run.font.size = Pt(36)
+            run.font.bold = True
+            run.font.color.rgb = ACCENT
+            line = slide.shapes.add_shape(
+                1, Inches(4.2), Inches(4.45), SLIDE_W - Inches(8.4), Pt(2)
+            )
+            line.fill.solid()
+            line.fill.fore_color.rgb = ACCENT
+            line.line.fill.background()
         else:
             add_title(slide, s.get("title", ""))
             bullets = s.get("bullets") or []

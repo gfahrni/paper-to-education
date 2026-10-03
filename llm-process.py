@@ -8,14 +8,26 @@ repli sur d'autres modèles) de produire :
     llm-output/storyboard.json   plan du PowerPoint (slides, images, voix off)
     llm-output/voiceover.md      texte de commentaire par slide
 
+Deux axes paramètrent le rendu :
+
+    --mode  journal | course    article (journal club) ou cours de formation
+    --depth summary | extensive résumé borné, ou explicatif exhaustif (sans
+                                plafond de slides ; une passe « plan » est
+                                d'abord générée dans llm-output/plan.md)
+
+Le prompt final est composé : prompt de base (`prompts/llm-process.md`) +
+fragment de mode + fragment de profondeur (`prompts/fragments/`). Le contexte
+d'exécution (sources, sortie) est injecté en tête.
+
 La session a accès aux outils (lecture/écriture de fichiers) et lit elle-même
-`paper-processed/` pour comprendre l'article.
+`paper-processed/` pour comprendre le contenu.
 
 Prérequis : le binaire `opencode` doit être dans le PATH, et
 `paper-processed/` doit avoir été généré par `extract.py`.
 
 Usage :
     python llm-process.py [--paper paper-processed] [--out llm-output]
+                          [--mode journal|course] [--depth summary|extensive]
                           [--prompt prompts/llm-process.md] [--config config.json]
                           [--model opencode-go/deepseek-v4.1-flash] [--model ...]
                           [--timeout 1800] [--build] [--dry-run]
@@ -28,7 +40,7 @@ Usage :
     --serve-tts avec --tts mlx : démarre/arrête le serveur local si besoin
     --speed     vitesse de lecture (défaut 1.0)
     --advance   en diaporama, avance à la fin du voiceover de chaque slide
-    --dry-run   affiche la commande sans exécuter la session (test rapide)
+    --dry-run   affiche la commande et le prompt composé sans exécuter la session
 
 Choix du modèle / de l'API :
     Copie `config.example.json` en `config.json` (gitignoré), puis renseigne
@@ -55,6 +67,7 @@ DEFAULT_MODELS = [
 ]
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+FRAGMENTS_DIR = SCRIPT_DIR / "prompts" / "fragments"
 
 
 def load_config(path: Path) -> dict:
@@ -167,6 +180,120 @@ def validate(out: Path) -> list[str]:
     return problems
 
 
+def load_fragment(name: str) -> str:
+    """Charge un fragment de prompt (prompts/fragments/<name>.md)."""
+    path = FRAGMENTS_DIR / f"{name}.md"
+    if not path.is_file():
+        sys.exit(f"Fragment de prompt introuvable : {path}")
+    return path.read_text(encoding="utf-8").strip()
+
+
+def load_sources(paper: Path) -> list[dict]:
+    """Lit `metadata/sources.json`, avec repli sur l'ancienne structure plate."""
+    index = paper / "metadata" / "sources.json"
+    if index.is_file():
+        try:
+            data = json.loads(index.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        sources = data.get("sources") if isinstance(data, dict) else None
+        if sources:
+            return sources
+    return [{
+        "id": paper.name,
+        "filename": paper.name,
+        "title": None,
+        "page_count": None,
+        "dir": "",
+        "text": "text/full_text.md",
+        "metadata": "metadata/extraction.json",
+    }]
+
+
+def display_path(path: Path, session_dir: Path) -> str:
+    """Chemin relatif au dossier de session si possible, sinon absolu."""
+    path = path.resolve()
+    try:
+        return str(path.relative_to(session_dir))
+    except ValueError:
+        return str(path)
+
+
+def build_header(
+    paper: Path,
+    out: Path,
+    session_dir: Path,
+    sources: list[dict],
+    mode: str,
+    depth: str,
+    plan_path: Path | None = None,
+) -> str:
+    """Préambule de contexte injecté en tête du prompt."""
+    lines = [
+        "<!-- Contexte d'exécution",
+        f"     dossier de travail opencode : {session_dir}",
+        f"     mode : {mode} | profondeur : {depth}",
+        f"     extraction : {display_path(paper, session_dir)}",
+        f"     sources ({len(sources)}) :",
+    ]
+    for s in sources:
+        title = s.get("title") or s.get("filename") or s.get("id") or "?"
+        pages = f", {s['page_count']} p." if s.get("page_count") else ""
+        lines.append(f"       [{s.get('id', '?')}] {title}{pages}")
+        if s.get("text"):
+            lines.append(
+                f"            texte : {display_path(paper / s['text'], session_dir)}"
+            )
+        if s.get("metadata"):
+            lines.append(
+                f"            index : {display_path(paper / s['metadata'], session_dir)}"
+            )
+    lines.append(f"     sortie : {display_path(out, session_dir)}")
+    lines.append(
+        f"     livrables : {display_path(out / 'storyboard.json', session_dir)}, "
+        f"{display_path(out / 'voiceover.md', session_dir)}"
+    )
+    if plan_path is not None:
+        lines.append(f"     plan détaillé : {display_path(plan_path, session_dir)}")
+    lines.append("-->")
+    return "\n".join(lines)
+
+
+def compose_prompt(header: str, *blocks: str) -> str:
+    """Assemble le contexte puis les blocs de prompt, séparés par une ligne vide."""
+    parts = [header.strip()]
+    parts += [b.strip() for b in blocks if b and b.strip()]
+    return "\n\n".join(parts) + "\n"
+
+
+def run_models(
+    opencode: str,
+    models: list[str],
+    prompt: str,
+    log_path: Path,
+    timeout: int,
+    extra_env: dict[str, str] | None,
+    session_dir: Path,
+    check,
+) -> str | None:
+    """Essaie chaque modèle jusqu'à ce que `check()` ne renvoie plus de problème."""
+    for i, model in enumerate(models, start=1):
+        print(f"\n=== Tentative {i}/{len(models)} avec {model} ===")
+        cmd = build_command(opencode, model, prompt)
+        code = run_session(cmd, log_path, timeout, extra_env, session_dir)
+        if code != 0:
+            print(f"  session terminée avec le code {code}, modèle suivant.")
+            continue
+        problems = check()
+        if not problems:
+            print(f"\nOK — livrables générés par {model}.")
+            return model
+        print("  livrables incomplets :")
+        for p in problems:
+            print(f"    - {p}")
+    return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Étape 2 : storyboard PowerPoint + voiceover via opencode."
@@ -174,6 +301,11 @@ def main() -> None:
     ap.add_argument("--paper", type=Path, default=Path("paper-processed"))
     ap.add_argument("--out", type=Path, default=Path("llm-output"))
     ap.add_argument("--prompt", type=Path, default=SCRIPT_DIR / "prompts/llm-process.md")
+    ap.add_argument("--mode", choices=["journal", "course"], default="journal",
+                    help="registre : journal club (article) ou cours (défaut : journal)")
+    ap.add_argument("--depth", choices=["summary", "extensive"], default="summary",
+                    help="profondeur : résumé borné ou explicatif exhaustif "
+                         "(défaut : summary)")
     ap.add_argument("--config", type=Path, default=SCRIPT_DIR / "config.json",
                     help="config locale (modèles, clés API) — ignorée par Git")
     ap.add_argument(
@@ -234,21 +366,6 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     opencode = find_opencode()
-    prompt = prompt_file.read_text(encoding="utf-8")
-    # Ancre les chemins réels : le prompt versionné parle en relatifs
-    # (paper-processed/, llm-output/) valables quand session_dir == WORK.
-    # Si l'utilisateur passe des chemins absolus ailleurs, on lève
-    # l'ambiguïté en tête de prompt plutôt que de laisser l'agent chercher.
-    paper_rel = paper.relative_to(session_dir) if paper.is_relative_to(session_dir) else paper
-    out_rel = out.relative_to(session_dir) if out.is_relative_to(session_dir) else out
-    prompt = (
-        f"<!-- contexte d'exécution : dossier opencode --dir = {session_dir}, "
-        f"extraction = {paper} (référencé '{paper_rel}'), "
-        f"sortie = {out} (référencé '{out_rel}'). "
-        f"Lis l'extraction à {paper}/text/full_text.md et "
-        f"{paper}/metadata/extraction.json, écris les livrables à "
-        f"{out}/storyboard.json et {out}/voiceover.md. -->\n\n" + prompt
-    )
     config_file = (
         (root / args.config).resolve() if not args.config.is_absolute() else args.config
     )
@@ -257,37 +374,78 @@ def main() -> None:
     env_extra = {k: str(v) for k, v in (config.get("env") or {}).items() if v}
     log_path = out / "llm-session.log"
 
+    base_prompt = prompt_file.read_text(encoding="utf-8")
+    mode_fragment = load_fragment(args.mode)
+    depth_fragment = load_fragment(args.depth)
+    sources = load_sources(paper)
+    plan_path = out / "plan.md" if args.depth == "extensive" else None
+    header = build_header(
+        paper, out, session_dir, sources, args.mode, args.depth, plan_path
+    )
+    full_prompt = compose_prompt(header, base_prompt, mode_fragment, depth_fragment)
+
     print(f"paper    : {paper}")
     print(f"output   : {out}")
     print(f"session  : {session_dir} (--dir opencode)")
+    print(f"mode     : {args.mode} / {args.depth} ({len(sources)} source(s))")
     print(f"config   : {config_file if config else '(aucune)'}")
     print(f"modèles  : {', '.join(models)}")
     if env_extra:
         print(f"clés API : {', '.join(env_extra)} (depuis la config)")
 
     if args.dry_run:
-        cmd = build_command(opencode, models[0], prompt)
+        if args.depth == "extensive":
+            plan_prompt = compose_prompt(
+                build_header(
+                    paper, out, session_dir, sources, args.mode, args.depth, plan_path
+                ),
+                load_fragment("plan"),
+            )
+            print("\n[dry-run] passe 1/2 — plan.md :\n")
+            print(plan_prompt)
         print("\n[dry-run] commande :")
-        print(" ".join(cmd[:8]), "<prompt>")
-        print("\nPrompt :")
-        print(prompt)
+        cmd = build_command(opencode, models[0], "<prompt>")
+        print(" ".join(cmd))
+        print("\n[dry-run] passe 2/2 — storyboard + voiceover :\n")
+        print(full_prompt)
         return
 
-    for i, model in enumerate(models, start=1):
-        print(f"\n=== Tentative {i}/{len(models)} avec {model} ===")
-        cmd = build_command(opencode, model, prompt)
-        code = run_session(cmd, log_path, args.timeout, env_extra, session_dir)
-        if code != 0:
-            print(f"  session terminée avec le code {code}, modèle suivant.")
-            continue
-        problems = validate(out)
-        if not problems:
-            print(f"\nOK — livrables générés par {model}.")
-            break
-        print("  livrables incomplets :")
-        for p in problems:
-            print(f"    - {p}")
-    else:
+    if args.depth == "extensive":
+        print("\n=== Passe 1/2 : plan détaillé ===")
+        if plan_path.is_file() and plan_path.read_text(encoding="utf-8").strip():
+            print(f"  plan existant réutilisé : {plan_path}")
+        else:
+            plan_prompt = compose_prompt(
+                build_header(
+                    paper, out, session_dir, sources, args.mode, args.depth, plan_path
+                ),
+                load_fragment("plan"),
+            )
+            plan_log = out / "plan-session.log"
+
+            def check_plan() -> list[str]:
+                if not plan_path.is_file():
+                    return [f"manquant : {plan_path}"]
+                if not plan_path.read_text(encoding="utf-8").strip():
+                    return ["plan.md vide"]
+                return []
+
+            plan_model = run_models(
+                opencode, models, plan_prompt, plan_log, args.timeout,
+                env_extra, session_dir, check_plan,
+            )
+            if plan_model is None:
+                sys.exit(
+                    "\nAucun modèle n'a produit plan.md.\n"
+                    f"Voir le log : {plan_log}"
+                )
+        print("\n=== Passe 2/2 : storyboard + voiceover ===")
+
+    main_model = run_models(
+        opencode, models, full_prompt, log_path, args.timeout,
+        env_extra, session_dir, lambda: validate(out),
+    )
+    if main_model is None:
         sys.exit(
             "\nAucun modèle n'a produit les livrables attendus.\n"
             f"Voir le log : {log_path}"
