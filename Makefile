@@ -5,6 +5,8 @@ PAPER ?= paper-processed
 OUT   ?= llm-output
 MODE  ?= journal
 DEPTH ?= summary
+KIND  ?= auto
+RENDER_DPI ?= 150
 TTS   ?= mlx
 
 ifeq ($(TTS),say)
@@ -32,11 +34,12 @@ help:
 	@echo "Choix de rendu :"
 	@echo "  MODE=journal|course        registre (défaut : journal)"
 	@echo "  DEPTH=summary|extensive    profondeur (défaut : summary)"
+	@echo "  KIND=auto|article|non_article   type de doc (défaut : auto)"
 	@echo "  ex. make storyboard MODE=course DEPTH=extensive"
 	@echo "  ex. make course      : raccourci MODE=course"
 	@echo ""
-	@echo "Variables : PAPER=$(PAPER) OUT=$(OUT) MODE=$(MODE) DEPTH=$(DEPTH) TTS=$(TTS)"
-	@echo "            VOICE=$(VOICE) SPEED=$(SPEED) ADVANCE=$(ADVANCE)"
+	@echo "Variables : PAPER=$(PAPER) OUT=$(OUT) MODE=$(MODE) DEPTH=$(DEPTH) KIND=$(KIND) TTS=$(TTS)"
+	@echo "            VOICE=$(VOICE) SPEED=$(SPEED) ADVANCE=$(ADVANCE) RENDER_DPI=$(RENDER_DPI)"
 	@echo "            ADVANCE=0 : pas d'avance auto (clic pour changer de slide)"
 
 install:
@@ -46,7 +49,7 @@ install:
 	@echo "Environnement prêt. Active-le : source .venv/bin/activate"
 
 extract:
-	python extract.py --out $(PAPER)
+	python extract.py --out $(PAPER) --kind $(KIND) --render-dpi $(RENDER_DPI)
 
 storyboard:
 	python llm-process.py --paper $(PAPER) --out $(OUT) \

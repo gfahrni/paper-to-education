@@ -5,29 +5,41 @@ Objectif : produire une extraction BRUTE et traçable, sans chercher à
 interpréter. L'interprétation (sections, résumé, storyboard...) est laissée
 au LLM en aval.
 
+Chaque PDF est classé automatiquement « article » ou « non_article » :
+
+- **article** (légendes « Figure N » / « Table N ») : figures et tables
+  extraites et appariées à leur légende.
+- **non_article** (diaporama, procédure, guideline…) : chaque page est rendue
+  en image (`pages/page_NN.png`, auto-descriptif) et les images sans légende
+  sont exportées dans `images/` avec un fichier de contexte (page + texte
+  voisin).
+
 Sorties (dossier `paper-processed/` par défaut) :
 
-Un seul PDF (structure plate, mode journal club) :
-    text/full_text.md              texte dans l'ordre de lecture, avec
-                                   marqueurs de page <!-- page N -->
-    figures/<label>.png            une image par figure (nom = n° réel)
+Un seul PDF (structure plate) :
+    text/full_text.md              texte dans l'ordre de lecture, <!-- page N -->
+    figures/<label>.png            figure appariée à une légende (article)
     captions/<label>.txt           légende associée
-    tables/<label>.png             table rendue en image
+    tables/<label>.png             table rendue en image (article)
     tables/<label>.md              table en texte brut (best effort)
-    metadata/extraction.json       index complet (page, bbox, méthode...)
+    pages/page_NN.png              rendu de page (non_article)
+    images/<id>.png                image sans légende (non_article)
+    images/<id>.txt                contexte de cette image (page + texte voisin)
+    metadata/extraction.json       index complet (page, bbox, méthode, type…)
 
-Un dossier de plusieurs PDF (structure multi-sources, mode cours) :
+Un dossier de plusieurs PDF (structure multi-sources) :
     sources/<NN-slug>/…            une arborescence complète par PDF
-    metadata/sources.json          index agrégé des sources
+    metadata/sources.json          index agrégé des sources (+ type détecté)
 
-Dans les deux cas, `metadata/sources.json` liste chaque source avec son texte
-et son index de figures/tables : c'est le point d'entrée pour l'étape LLM.
+Dans les deux cas, `metadata/sources.json` liste chaque source avec son texte,
+son type et ses visuels : c'est le point d'entrée pour l'étape LLM.
 
 Dépendances : PyMuPDF, Pillow. Optionnel : pdfplumber (meilleures tables).
 
 Usage :
     python extract.py [article.pdf | dossier/] [--in input-pdf]
                       [--out paper-processed] [--dpi 300]
+                      [--kind auto|article|non_article] [--render-dpi 150]
 
 Sans argument, les PDF de `input-pdf/` sont utilisés : un seul -> structure
 plate, plusieurs -> structure multi-sources.
@@ -37,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import io
 import json
 import re
@@ -62,6 +75,9 @@ REPEAT_FRAC = 0.35     # texte répété sur >= 35% des pages = boilerplate
 MIN_IMG_PX_W = 300     # filtre logos / puces
 MIN_IMG_PX_H = 200
 CAPTION_LOOKAHEAD = 0.45   # hauteur max (fraction de page) d'une figure/table
+PAGE_BG_FRAC = 0.85        # image couvrant la page = fond (couverte par le rendu)
+IMG_CONTEXT_CHARS = 240    # longueur du contexte textuel attaché à une image
+ARTICLE_CAPTION_MIN = 2    # légendes numérotées min. pour classer « article »
 
 FIGURE_RE = re.compile(r"^\s*(Figure|Fig\.?)\s+([A-Za-z]?\d+[A-Za-z]?)\b")
 TABLE_RE = re.compile(r"^\s*(Table|Tab\.?)\s*\.?\s*([A-Za-z]?\d+[A-Za-z]?)?\b")
@@ -250,6 +266,47 @@ def merge_drop_caps(blocks: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Classification article / non-article (déterministe, sans LLM)
+# ---------------------------------------------------------------------------
+
+def classify(doc) -> tuple[str, str]:
+    """Classe un PDF en « article » ou « non_article » (et motive le choix).
+
+    Signaux : légendes numérotées « Figure N » / « Table N », structure
+    d'article (abstract / references), format des pages (diaporama).
+    """
+    fig = tbl = 0
+    landscape = 0
+    texts: list[str] = []
+    for page in doc:
+        w, h = page.rect.width, page.rect.height
+        if w > h:
+            landscape += 1
+        for b in page_blocks(page):
+            t = b["text"]
+            texts.append(t)
+            if FIGURE_RE.match(t):
+                fig += 1
+            if TABLE_RE.match(t):
+                tbl += 1
+
+    text = " ".join(texts).lower()
+    captions = fig + tbl
+    has_abstract = "abstract" in text
+    has_refs = ("references" in text or "bibliograph" in text
+                or "références" in text)
+    landscape_frac = landscape / doc.page_count if doc.page_count else 0.0
+
+    if captions >= ARTICLE_CAPTION_MIN:
+        return "article", f"{captions} légende(s) numérotée(s)"
+    if captions >= 1 and has_abstract and has_refs:
+        return "article", f"{captions} légende(s) + structure d'article"
+    if captions == 0 and landscape_frac >= 0.6:
+        return "non_article", "format diaporama, aucune légende numérotée"
+    return "non_article", f"{captions} légende(s), pas de structure d'article"
+
+
+# ---------------------------------------------------------------------------
 # Détection et extraction des figures
 # ---------------------------------------------------------------------------
 
@@ -308,6 +365,68 @@ def match_caption(text: str, kind: str):
     if rest[:1].islower():
         return None
     return label, text
+
+
+# ---------------------------------------------------------------------------
+# Documents non-article : rendus de page + images non légendées avec contexte
+# ---------------------------------------------------------------------------
+
+def save_page(page, dest: Path, dpi: int) -> tuple[int, int]:
+    """Rend une page entière en PNG (auto-descriptif pour un diaporama)."""
+    pix = page.get_pixmap(dpi=dpi)
+    pix.save(dest)
+    return pix.width, pix.height
+
+
+def nearest_context(blocks: list[dict], bbox) -> str:
+    """Texte du bloc le plus proche d'une image (pseudo-légende par proximité)."""
+    if not blocks:
+        return ""
+    block = min(blocks, key=lambda b: rect_distance(b["bbox"], bbox))
+    return clean(block["text"])[:IMG_CONTEXT_CHARS]
+
+
+def export_uncaptioned_images(
+    doc, page, page_no: int, out: Path,
+    used_hashes: set[str], used_names: dict[str, int], blocks: list[dict],
+) -> list[dict]:
+    """Exporte les images sans légende, dédoublonnées, avec un fichier contexte."""
+    page_area = page.rect.width * page.rect.height
+    exported: list[dict] = []
+    page_title = clean(blocks[0]["text"]) if blocks else ""
+    for im in large_images(page):
+        x0, y0, x1, y1 = im["bbox"]
+        if page_area and (x1 - x0) * (y1 - y0) > PAGE_BG_FRAC * page_area:
+            continue  # image de fond : déjà couverte par le rendu de page
+        info = doc.extract_image(im["xref"])
+        digest = hashlib.md5(info["image"]).hexdigest()
+        if digest in used_hashes:
+            continue
+        used_hashes.add(digest)
+
+        name = unique_name(f"p{page_no:02d}-image", used_names)
+        img_path = out / "images" / f"{name}.png"
+        pw, ph = save_native(doc, im["xref"], img_path)
+        context = nearest_context(blocks, im["bbox"])
+        ctx_path = out / "images" / f"{name}.txt"
+        ctx_path.write_text(
+            f"Source : page {page_no}\n"
+            f"Titre de page : {page_title}\n"
+            f"Contexte : {context}\n",
+            encoding="utf-8",
+        )
+        exported.append({
+            "id": name,
+            "page": page_no,
+            "method": "native_image",
+            "image": str(img_path.relative_to(out)),
+            "context_file": str(ctx_path.relative_to(out)),
+            "context": context,
+            "page_title": page_title,
+            "pixel_size": [pw, ph],
+            "source_bbox": [round(v, 2) for v in im["bbox"]],
+        })
+    return exported
 
 
 # ---------------------------------------------------------------------------
@@ -400,18 +519,30 @@ def source_entry(meta: dict, pdf: Path, sid: str, sdir_rel: str) -> dict:
     def rel(name: str) -> str:
         return f"{sdir_rel}/{name}" if sdir_rel else name
 
-    return {
+    entry = {
         "id": sid,
         "pdf": meta.get("source_pdf") or str(pdf.resolve()),
         "filename": pdf.name,
         "title": meta.get("title") or pdf.stem,
         "page_count": meta.get("page_count"),
+        "kind": meta.get("kind", "article"),
         "dir": sdir_rel,
         "text": rel("text/full_text.md"),
         "metadata": rel("metadata/extraction.json"),
         "figures": len(meta.get("figures", [])),
         "tables": len(meta.get("tables", [])),
     }
+    if meta.get("kind_reason"):
+        entry["kind_reason"] = meta["kind_reason"]
+    n_pages = len(meta.get("pages", []))
+    n_images = len(meta.get("images", []))
+    if n_pages:
+        entry["pages_dir"] = rel("pages")
+        entry["pages_count"] = n_pages
+    if n_images:
+        entry["images_dir"] = rel("images")
+        entry["images_count"] = n_images
+    return entry
 
 
 def write_sources_index(out: Path, entries: list[dict]) -> None:
@@ -427,15 +558,21 @@ def write_sources_index(out: Path, entries: list[dict]) -> None:
 
 
 
-def run(pdf: Path, out: Path, dpi: int) -> dict:
-    for sub in ["text", "figures", "tables", "captions", "metadata"]:
+def run(pdf: Path, out: Path, dpi: int, render_dpi: int = 150,
+        forced_kind: str = "auto") -> dict:
+    for sub in ["text", "figures", "tables", "captions", "metadata",
+                "pages", "images"]:
         (out / sub).mkdir(parents=True, exist_ok=True)
 
     doc = pymupdf.open(pdf)
+    kind, kind_reason = (classify(doc) if forced_kind == "auto"
+                         else (forced_kind, "forcé"))
     boilerplate = detect_boilerplate(doc)
 
     paragraphs: list[str] = []
     figures, tables, unlabeled = [], [], []
+    pages_meta, images_meta = [], []
+    used_hashes: set[str] = set()
     used_names: dict[str, int] = {}
     fig_n = tbl_n = 0
 
@@ -533,6 +670,18 @@ def run(pdf: Path, out: Path, dpi: int) -> dict:
                 "pixel_size": [im["wpx"], im["hpx"]],
             })
 
+        if kind == "non_article":
+            pg_path = out / "pages" / f"page_{page_no:02d}.png"
+            pw, ph = save_page(page, pg_path, render_dpi)
+            pages_meta.append({
+                "page": page_no,
+                "image": str(pg_path.relative_to(out)),
+                "pixel_size": [pw, ph],
+            })
+            images_meta.extend(export_uncaptioned_images(
+                doc, page, page_no, out, used_hashes, used_names, ordered
+            ))
+
     (out / "text" / "full_text.md").write_text("\n\n".join(paragraphs) + "\n",
                                                encoding="utf-8")
 
@@ -540,12 +689,16 @@ def run(pdf: Path, out: Path, dpi: int) -> dict:
         "source_pdf": str(pdf.resolve()),
         "page_count": doc.page_count,
         "title": doc.metadata.get("title"),
+        "kind": kind,
+        "kind_reason": kind_reason,
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
         "engine": {"pymupdf": getattr(pymupdf, "__version__", "?"),
                    "pdfplumber": pdfplumber is not None},
         "text": "text/full_text.md",
         "figures": figures,
         "tables": tables,
+        "pages": pages_meta,
+        "images": images_meta,
         "unlabeled_images": unlabeled,
     }
     (out / "metadata" / "extraction.json").write_text(
@@ -564,7 +717,14 @@ def main() -> None:
     ap.add_argument("--in", dest="indir", type=Path, default=Path("input-pdf"),
                     help="Dossier des PDF d'entrée")
     ap.add_argument("--out", type=Path, default=Path("paper-processed"))
-    ap.add_argument("--dpi", type=int, default=300)
+    ap.add_argument("--dpi", type=int, default=300,
+                    help="résolution des recadrages de figure/table (défaut 300)")
+    ap.add_argument("--render-dpi", type=int, default=150,
+                    help="résolution des rendus de page pour les documents "
+                         "non-article (défaut 150)")
+    ap.add_argument("--kind", choices=["auto", "article", "non_article"],
+                    default="auto",
+                    help="type de document ; « auto » détecte par PDF (défaut)")
     args = ap.parse_args()
 
     sources, multi = resolve_sources(args.pdf, args.indir)
@@ -580,7 +740,7 @@ def main() -> None:
             sid = safe_slug(pdf.stem)
             sdir = args.out
             sdir_rel = ""
-        meta = run(pdf, sdir, args.dpi)
+        meta = run(pdf, sdir, args.dpi, args.render_dpi, args.kind)
         entries.append(source_entry(meta, pdf, sid, sdir_rel))
 
     write_sources_index(args.out, entries)
@@ -588,13 +748,23 @@ def main() -> None:
     if multi:
         print(f"sources  -> {len(entries)}")
         for e in entries:
-            print(f"  - {e['filename']} : {e['figures']} figures, "
-                  f"{e['tables']} tables, {e['page_count']} p. -> {e['dir']}/")
+            extra = ""
+            if e.get("pages_count"):
+                extra += f", {e['pages_count']} rendus de page"
+            if e.get("images_count"):
+                extra += f", {e['images_count']} images"
+            print(f"  - {e['filename']} [{e['kind']}] : {e['figures']} figures, "
+                  f"{e['tables']} tables{extra}, {e['page_count']} p. -> {e['dir']}/")
     else:
         meta = entries[0]
+        print(f"type     -> {meta['kind']} ({meta.get('kind_reason', '')})")
         print(f"texte    -> {args.out / 'text' / 'full_text.md'}")
         print(f"figures  -> {meta['figures']}")
         print(f"tables   -> {meta['tables']}")
+        if meta.get("pages_count"):
+            print(f"pages    -> {meta['pages_count']} rendus de page")
+        if meta.get("images_count"):
+            print(f"images   -> {meta['images_count']} images non légendées")
     print(f"index    -> {args.out / 'metadata' / 'sources.json'}")
 
 

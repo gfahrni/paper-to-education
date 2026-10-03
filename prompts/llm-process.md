@@ -10,19 +10,23 @@ Le registre et la profondeur attendus sont précisés plus bas par les sections
 ## Contexte
 
 L'extraction est produite par `extract.py` et décrite en tête de ce prompt. Elle
-peut contenir une seule étude (structure `text/`, `figures/`, `tables/`,
-`captions/`, `metadata/`) ou plusieurs études regroupées sous `sources/`.
+peut contenir une seule source (structure `text/`, `figures/`, `tables/`,
+`captions/`, `pages/`, `images/`, `metadata/`) ou plusieurs sources regroupées
+sous `sources/`.
 
 Commence toujours par lire `metadata/sources.json` : il liste chaque source, son
-titre, son nombre de pages, son texte complet et son index de figures/tables.
-Puis parcours, pour chaque source :
+titre, son nombre de pages, son **type** (`kind`) et son texte complet. Puis
+parcours, pour chaque source :
 
 - `…/text/full_text.md` — texte complet dans l'ordre de lecture, avec des
   marqueurs `<!-- page N -->` ;
-- `…/metadata/extraction.json` — index des figures et tables : `id`, `label`,
-  `page`, `caption`, chemin `image`, `caption_file`, `pixel_size` ;
-- `…/captions/*.txt` — légende associée à chaque figure/table ;
-- `…/figures/*.png` et `…/tables/*.png` — images extraites.
+- `…/metadata/extraction.json` — index complet : figures/tables (article),
+  `pages` et `images` (non-article), avec page, bbox et méthode ;
+- **article** : `…/figures/*.png`, `…/tables/*.png` et `…/captions/*.txt` —
+  figures et tables appariées à leur légende numérotée ;
+- **non_article** : `…/pages/page_NN.png` — rendu de chaque page
+  (auto-descriptif) — et `…/images/*.png` accompagnées de `…/images/*.txt`
+  (contexte : page et texte voisin).
 
 **Lis ces fichiers toi-même** avant de produire quoi que ce soit.
 
@@ -78,7 +82,8 @@ Règles du schéma :
   `"section"` affiche un simple séparateur de chapitre (titre centré) ; utile
   surtout pour une présentation longue, pas obligatoire.
 - `image` est un chemin **exact** vers un fichier existant (sous
-  `paper-processed/figures/` ou `paper-processed/tables/`), ou `null`.
+  `paper-processed/figures/`, `paper-processed/tables/`,
+  `paper-processed/pages/` ou `paper-processed/images/`), ou `null`.
   N'invente jamais de chemin.
 - `image_caption` est `null` quand `image` est `null`.
 - `bullets` est une liste de chaînes courtes (max ~12 mots chacune).
@@ -114,6 +119,27 @@ Les textes de `voiceover.md` doivent être identiques à ceux du champ
   position ; il ne lit pas les puces.
 - **Langue : français.** Les termes scientifiques peuvent rester en anglais
   lorsqu'ils sont d'usage courant.
+
+## Visuels selon le type de source
+
+Chaque source a un `kind` (`article` ou `non_article`) indiqué dans
+`metadata/sources.json`.
+
+- **`article`** : utilise les figures/tables numérotées via `…/figures/` et
+  `…/tables/`. `image` pointe vers le fichier, `image_caption` reprend une
+  légende courte.
+- **`non_article`** (diaporama, procédure, guideline…) : il n'y a pas de
+  légendes. Privilégie les **rendus de page** `…/pages/page_NN.png` : une page
+  est auto-descriptive (elle porte son titre et son contenu). Choisis la page
+  dont le titre ou le sujet correspond à ta slide, et écris `image_caption`
+  sous la forme « Source : <titre de la source>, p. <page> ». Tu peux compléter
+  avec une image de `…/images/` quand son fichier `.txt` de contexte montre
+  qu'elle est pertinente.
+- S'il n'y a pas de visuel adapté, laisse `image` à `null` : mieux vaut une
+  slide sans image qu'un visuel hors sujet.
+- **Choisis peu de visuels**, et toujours pertinents. Priorité aux pages clés
+  (définitions, algorithmes, tableaux, schémas), pas aux captures d'écran
+  d'interface.
 
 ## Ton du voiceover : un discours, pas un commentaire de figure
 
@@ -154,7 +180,8 @@ Bon — raconte et interprète :
 ## Méthode
 
 1. Lis `metadata/sources.json`, puis le texte et l'index de chaque source.
-2. Lis les légendes pertinentes et repère les figures/tables à réutiliser.
+2. Repère les visuels pertinents : figures/tables légendées (article) ou titres
+   de page et rendus de page (non_article).
 3. Rédige le plan des slides, puis le voiceover de chaque slide dans le ton
    d'un discours (voir « Ton du voiceover »), en respectant « Mode » et
    « Profondeur ».

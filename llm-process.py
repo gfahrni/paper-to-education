@@ -239,7 +239,9 @@ def build_header(
     for s in sources:
         title = s.get("title") or s.get("filename") or s.get("id") or "?"
         pages = f", {s['page_count']} p." if s.get("page_count") else ""
-        lines.append(f"       [{s.get('id', '?')}] {title}{pages}")
+        kind = s.get("kind")
+        kind_txt = f" [{kind}]" if kind else ""
+        lines.append(f"       [{s.get('id', '?')}]{kind_txt} {title}{pages}")
         if s.get("text"):
             lines.append(
                 f"            texte : {display_path(paper / s['text'], session_dir)}"
@@ -247,6 +249,23 @@ def build_header(
         if s.get("metadata"):
             lines.append(
                 f"            index : {display_path(paper / s['metadata'], session_dir)}"
+            )
+        if s.get("figures") or s.get("tables"):
+            lines.append(
+                f"            figures/tables : {s.get('figures', 0)}/"
+                f"{s.get('tables', 0)}"
+            )
+        if s.get("pages_dir"):
+            lines.append(
+                f"            rendus de page : "
+                f"{display_path(paper / s['pages_dir'], session_dir)} "
+                f"({s.get('pages_count', 0)})"
+            )
+        if s.get("images_dir"):
+            lines.append(
+                f"            images (contexte dans *.txt) : "
+                f"{display_path(paper / s['images_dir'], session_dir)} "
+                f"({s.get('images_count', 0)})"
             )
     lines.append(f"     sortie : {display_path(out, session_dir)}")
     lines.append(

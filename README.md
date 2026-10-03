@@ -39,6 +39,11 @@ llm-output/presentation.pptx   slides + images + voiceover
   texte brut, légendes appariées, index JSON de traçabilité.
 - **Multi-sources** : `extract.py` accepte un **dossier de PDF** et produit une
   arborescence par source plus un index agrégé, pour construire un cours.
+- **Classement automatique** de chaque PDF : `article` (légendes numérotées →
+  figures/tables) ou `non_article` (diaporama, procédure, guideline). En
+  `non_article`, chaque page est rendue en image et les visuels non légendés
+  sont exportés avec un contexte (page + texte voisin), sans avoir besoin de
+  légende.
 - **Storyboard généré par LLM** : une session opencode non-interactive lit
   l'extraction et écrit un plan de slides (titres, puces, image associée) et un
   commentaire oral par slide.
@@ -201,7 +206,9 @@ plate, plusieurs -> structure multi-sources.
 | `pdf` (positionnel) | PDF de `input-pdf/` | PDF **ou dossier de PDF** source |
 | `--in` | `input-pdf` | Dossier des PDF d'entrée |
 | `--out` | `paper-processed` | Dossier de sortie |
-| `--dpi` | `300` | Résolution des recadrages de page |
+| `--dpi` | `300` | Résolution des recadrages figure/table |
+| `--render-dpi` | `150` | Résolution des rendus de page (non-article) |
+| `--kind` | `auto` | `auto`, `article` ou `non_article` (force la stratégie) |
 
 #### `llm-process.py`
 
@@ -409,11 +416,14 @@ llm-output/       plan, storyboard, voiceover, audio, .pptx (gitignoré)
 ```text
 paper-processed/                  # un seul PDF (structure plate)
 ├── text/full_text.md             # texte complet, ordre de lecture, <!-- page N -->
-├── figures/<label>.png           # une image par figure (nom = n° réel)
-├── tables/<label>.png            # table rendue en image
+├── figures/<label>.png           # figure appariée à une légende (article)
+├── tables/<label>.png            # table rendue en image (article)
 ├── tables/<label>.md             # table en texte brut (best effort)
 ├── captions/<label>.txt          # légende associée à la figure/table
-├── metadata/extraction.json      # index complet (page, bbox, méthode…)
+├── pages/page_NN.png             # rendu de page (non_article)
+├── images/<id>.png               # image sans légende (non_article)
+├── images/<id>.txt               # contexte de l'image (page + texte voisin)
+├── metadata/extraction.json      # index complet (page, bbox, méthode, type…)
 └── metadata/sources.json         # index des sources (1 entrée ici)
 
 paper-processed/                  # dossier de PDF (multi-sources)
