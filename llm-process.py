@@ -300,13 +300,20 @@ def run_models(
         print(f"\n=== Tentative {i}/{len(models)} avec {model} ===")
         cmd = build_command(opencode, model, prompt)
         code = run_session(cmd, log_path, timeout, extra_env, session_dir)
-        if code != 0:
-            print(f"  session terminée avec le code {code}, modèle suivant.")
-            continue
+        # On vérifie toujours les livrables : `opencode run` peut sortir avec un
+        # code non nul après une erreur de stream transitoire alors que les
+        # fichiers ont bien été écrits. Le vrai critère de succès est `check()`.
         problems = check()
         if not problems:
+            if code != 0:
+                print(
+                    f"  session terminée avec le code {code}, "
+                    f"mais livrables présents — on continue."
+                )
             print(f"\nOK — livrables générés par {model}.")
             return model
+        if code != 0:
+            print(f"  session terminée avec le code {code}, modèle suivant.")
         print("  livrables incomplets :")
         for p in problems:
             print(f"    - {p}")
