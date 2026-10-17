@@ -60,6 +60,11 @@ import pymupdf
 from PIL import Image
 
 try:
+    from PIL import ImageCms
+except ImportError:  # Pillow compilé sans LittleCMS
+    ImageCms = None
+
+try:
     import pdfplumber
 except ImportError:
     pdfplumber = None
@@ -341,9 +346,37 @@ def rect_distance(a, b) -> float:
     return (dx * dx + dy * dy) ** 0.5
 
 
+# Modes que PNG sait encoder (cf. PIL.PngImagePlugin._OUTMODES) ; tout le
+# reste (CMYK, YCCK, LAB…) doit être converti avant enregistrement.
+PNG_MODES = {"1", "L", "LA", "I", "I;16", "I;16B", "P", "RGB", "RGBA"}
+
+
+def png_convert(img: Image.Image) -> Image.Image:
+    """Amène une image PIL dans un mode encodable en PNG.
+
+    Les PDF embarquent souvent des JPEG CMJN (DeviceCMYK) : PNG n'a pas de
+    mode CMYK, d'où « cannot write mode CMYK as PNG ». Si un profil ICC est
+    présent on s'en sert pour une conversion fidèle, sinon conversion directe.
+    """
+    if img.mode in PNG_MODES:
+        return img
+    icc = img.info.get("icc_profile")
+    if icc and ImageCms is not None:
+        try:
+            src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+            return ImageCms.profileToProfile(
+                img, src, ImageCms.createProfile("sRGB"), outputMode="RGB")
+        except Exception:
+            pass  # profil incohérent : on retombe sur une conversion simple
+    # NB : ne pas tester « A » dans getbands() (« L », « A », « B » du mode LAB
+    # contient un canal A sans être un canal alpha).
+    has_alpha = img.mode in ("RGBA", "LA", "PA", "RGBa", "La")
+    return img.convert("RGBA" if has_alpha else "RGB")
+
+
 def save_native(doc, xref: int, dest: Path) -> tuple[int, int]:
     info = doc.extract_image(xref)
-    img = Image.open(io.BytesIO(info["image"]))
+    img = png_convert(Image.open(io.BytesIO(info["image"])))
     img.save(dest, "PNG")
     return img.width, img.height
 
